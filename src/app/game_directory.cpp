@@ -238,27 +238,48 @@ void take_mounted(const fs::path& root, const oa::AssetStore& probe, GameInstall
 }
 
 // Runs the archive discovery on the installation's folders into `install`,
-// as its profile's layout names the archives.
-void discover_archives(const fs::path& root, GameInstall& install) {
+// as its profile's layout names the archives. A named installation archive
+// that is missing or cannot be opened is also a profile error, so the folder
+// cannot be played.
+void discover_archives(const fs::path& root, GameInstall& install, const fs::path& profile_file) {
     // The game's discovery scan (AssetStore::discover) decides
     // both which archives are mounted and their lookup precedence: the
-    // revision patch, then *.CCX, *.UFO and at most ten *.HPI, each group in
-    // Windows name order, then every *.hpi on each CD-ROM root with no limit
-    // but with already-mounted paths rejected. The game discs carry
-    // totala3.hpi, totala4.hpi and worlds.hpi, which an install without discs
-    // keeps in the game directory instead; the game directory then serves as
-    // the disc root: the archives past the *.HPI limit mount after everything
-    // else, as the disc copies would. A scratch store runs the scan so main()
-    // mounts the same archives in the same order. --archive bypasses this.
-    // A mod folder layers over the folder: discovery runs over both, as
-    // over one folder holding the files of both.
+    // revision patch, then *.CCX, *.UFO, the installation archives the
+    // profile names in the order written, and at most ten *.HPI, each group
+    // in Windows name order, then every *.hpi on each CD-ROM root with no
+    // limit but with already-mounted paths rejected. A listed name is left
+    // out of those groups. The game discs carry totala3.hpi, totala4.hpi and
+    // worlds.hpi, which an install without discs keeps in the game directory
+    // instead; the game directory then serves as the disc root: the archives
+    // past the *.HPI limit mount after everything else, as the disc copies
+    // would. A scratch store runs the scan so main() mounts the same archives
+    // in the same order. --archive bypasses this. A mod folder layers over
+    // the folder: discovery runs over both, as over one folder holding the
+    // files of both.
+    const auto plan = discovery_plan_of(install.profile.get());
     oa::AssetStore probe(install.folders);
-    for (const auto& outcome : probe.discover(discovery_plan_of(install.profile.get())))
-        if (!outcome.mounted && !outcome.already_mounted) {
-            std::cerr << "open-annihilation: skipping archive "
-                      << path_to_utf8(outcome.path.filename()) << ": " << outcome.error << '\n';
-            install.skipped.push_back(SkippedArchive{outcome.path, outcome.error});
-        }
+    for (const auto& outcome : probe.discover(plan)) {
+        if (outcome.mounted || outcome.already_mounted)
+            continue;
+        std::cerr << "open-annihilation: skipping archive " << path_to_utf8(outcome.path.filename())
+                  << ": " << outcome.error << '\n';
+        install.skipped.push_back(SkippedArchive{outcome.path, outcome.error});
+        const std::string name = path_to_utf8(outcome.path.filename());
+        bool named = false;
+        for (const auto& archive : plan.installation_archives)
+            named = named || oa::same_archive_file_name(name, archive);
+        if (!named)
+            continue;
+        // The profile was resolved before discovery, so the line of the name
+        // is not kept. The diagnostic names the file and the layout path.
+        install.profile_errors.push_back(
+            data::mod_profile::format_diagnostic(
+                data::mod_profile::Diagnostic{
+                    path_to_utf8(profile_file), {}, "layout.installation-archives", outcome.error
+                }
+            )
+        );
+    }
     take_mounted(root, probe, install);
 }
 
@@ -438,7 +459,7 @@ GameInstall inspect_game_install(
     install.profile_warnings = std::move(profile.warnings);
     if (!install.profile_errors.empty())
         return install;
-    discover_archives(root, install);
+    discover_archives(root, install, profile.file);
     if (!install.archives.empty() || install.profile)
         return install;
     // No archive mounts from a folder whose files' paths are longer than the

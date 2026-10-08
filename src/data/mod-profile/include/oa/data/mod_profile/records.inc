@@ -557,6 +557,10 @@ struct Layout {
     /// layout.revision-archive: Revision-slot archive rev31.gp3 is replaced; rev31.gp3 is no longer
     /// mounted. 3.1c: rev31.gp3.
     std::string revision_archive{"rev31.gp3"};
+    /// layout.installation-archives: Archives from the game installation, mounted in the order
+    /// written after the mod's own ccx and ufo archives and before the hpi group; a name here is
+    /// not also mounted with its group. 3.1c: [].
+    std::vector<std::string> installation_archives{};
     /// layout.cd-check: CD archive branch and CD identity check are bypassed; archives always mount
     /// from the install directory. 3.1c: true.
     bool cd_check{true};

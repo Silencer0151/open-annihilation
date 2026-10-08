@@ -353,6 +353,10 @@ void check_help_at_exit() {
         "--help lists --check-pad-controls between the pointer and touch checks"
     );
     expect(
+        at("[--check-unit-playout] [--check-running-while-inactive] ") != absent,
+        "--help lists --check-running-while-inactive after --check-unit-playout"
+    );
+    expect(
         at("[--touch-controls] [--game-files-route folder|demo|copy-yourself|manage] "
            "[--game-files-expect main-menu|stopped-kept|resumed|not-a-game|short-space|"
            "next-start] [--game-files-source PATH] [--game-files-free-bytes N] "
@@ -912,6 +916,7 @@ int main() {
         {"--check-frontend-controls"},
         {"--check-scroll-bars"},
         {"--check-engine-settings"},
+        {"--check-simulation-hash"},
         {"--check-user-folder"},
         {"--check-mod-switch"},
         {"--check-mod-warning"},
@@ -942,6 +947,18 @@ int main() {
     expect(
         pads.check_pad_controls && pads.fixed_clock && pads.unattended && !pads.headless_check,
         "--check-pad-controls is a windowed, fixed-clock and unattended run"
+    );
+    const auto inactive_loop = parse({"--check-running-while-inactive"});
+    expect(
+        inactive_loop.check_running_while_inactive && inactive_loop.fixed_clock &&
+            inactive_loop.unattended && !inactive_loop.headless_check,
+        "--check-running-while-inactive is a windowed, fixed-clock and unattended run"
+    );
+    expect(
+        rejection({"--check-running-while-inactive", "--headless-check"}) ==
+            "--check-running-while-inactive keeps a window and cannot be used with "
+            "--headless-check",
+        "--check-running-while-inactive keeps a window"
     );
     expect(
         parse({"--check-render-tiers", "--force-capable"}).force_capable,

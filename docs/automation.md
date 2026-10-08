@@ -142,7 +142,7 @@ print(read(sock)[0]["screen"])  # main_menu
 |---|---|
 | `hello` | the protocol's version, the engine's, the window's size, where the game's 640x480 canvas lies in it, the tick rate (30) |
 | `screen` | the screen shown (`main_menu`, `skirmish`, `mp_battleroom`, `match` and the like), the dialogs over it, the control that takes the keys, the pointer, and in a match where the camera looks |
-| `controls` | every control of the panel that takes the pointer, a dialog's first: its name as the GUI file spells it, its kind, its place on the canvas and in the window, its state and text, and a list's rows |
+| `controls` | an extension's windows first, then every control of the panel that takes the pointer, a dialog's first: its name, its kind, the extension window it belongs to (or none), its place on the canvas and in the window, its state and text, and a list's rows |
 | `input` | once the game has taken the events it was given, the frame and tick at which it took them ([below](#input)) |
 | `frame` | the frame the game presented in its window, or the one it composed, whole or a region of it, as RGB pixels, a PNG file, or a hash and mean colour |
 | `prefs` | the preferences as the game holds them now, and their file |

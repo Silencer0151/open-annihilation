@@ -67,10 +67,6 @@ void sound(void*, const char* name) {
     sounds.emplace_back(name);
 }
 
-bool disc(void*) {
-    return true;
-}
-
 // The launch a test lobby reads, whether it is active, and the
 // texts of the joins it asked for that failed.
 oa::ui::frontend_multiplayer::launch::LaunchBlock launch_block{};
@@ -147,7 +143,6 @@ mp::LobbyServices test_services() {
     services.play_sound = sound;
     services.message = message;
     services.tick = tick;
-    services.disc_present = disc;
     return services;
 }
 
@@ -1169,27 +1164,37 @@ void test_ready_and_start(const oa::ui::gui_layout::Layout& lounge) {
     expect((mp::local_info(f.lobby).options & mp::option::started) != 0, "started flag set");
     expect(f.game->frontend_pending_signal == 0x11, "start signal raised");
 
+    // Eight players, none of them with a game disc: START still starts the game.
     Fixture g(lounge);
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 7; ++i)
         g.join(0x300 + static_cast<uint32_t>(i), "P");
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 7; ++i)
         g.remote_info(
             0x300 + static_cast<uint32_t>(i), mp::option::ready, static_cast<uint8_t>(i + 1)
         );
-    for (int slot = 1; slot < 5; ++slot)
+    for (int slot = 0; slot < 8; ++slot)
         mp::slot_info(g.lobby, slot)->status = 0;
-    mp::lobby_player_count(*g.game) = 5;
-    for (int i = 0; i < 4; ++i)
+    mp::lobby_player_team(mp::local_player(g.lobby)) = 1;
+    mp::lobby_player_team(mp::slot_player(g.lobby, 1)) = 2;
+    mp::lobby_player_count(*g.game) = 8;
+    for (int i = 0; i < 7; ++i)
         g.synced(0x300 + static_cast<uint32_t>(i));
     (void)g.press("READY0");
     g.game->gui_flags |= 1;
     (void)mp::lobby_tick(g.lobby, g.panel);
+    for (int slot = 0; slot < 8; ++slot)
+        mp::slot_info(g.lobby, slot)->status = 0;
     last_message.clear();
     (void)mp::panel_press(g.panel, "START");
-    (void)mp::lobby_handle_event(g.lobby, g.panel);
     expect(
-        last_message == "There are not enough game CDs present to play", "five players need two CDs"
+        mp::lobby_handle_event(g.lobby, g.panel) == mp::LobbyAction::start,
+        "eight players with no discs start"
     );
+    expect(
+        last_message != "There are not enough game CDs present to play",
+        "START does not ask for game discs"
+    );
+    expect((mp::local_info(g.lobby).options & mp::option::started) != 0, "started with no discs");
 }
 
 /// Builds a battle room layout of its own: one row of READY, LOGO and CD
@@ -1395,15 +1400,40 @@ void test_row_indicators(const oa::ui::gui_layout::Layout& lounge) {
         "the host's colour square shows its colour"
     );
     expect(logo1 != nullptr && logo1->active != 0 && logo1->stage == 1, "a remote colour square");
-    expect(mp::panel_control(f.panel, "CD0")->active != 0, "the host shows its CD");
-    expect(mp::panel_control(f.panel, "CD1")->active != 0, "a remote player with a CD shows it");
+    expect(mp::panel_control(f.panel, "CD0")->active == 0, "the host shows no CD icon");
+    expect(
+        mp::panel_control(f.panel, "CD1")->active != 0, "a remote 3.1c player with a CD shows it"
+    );
     expect(mp::panel_control(f.panel, "CD2")->active == 0, "an open slot shows no CD");
+    auto* remote_block = reinterpret_cast<uint8_t*>(mp::slot_info(f.lobby, 1));
+    remote_block[oa::netgame::player_info_engine_signature_offset] =
+        oa::netgame::engine_signature_first;
+    remote_block[oa::netgame::player_info_engine_signature_offset + 1] =
+        oa::netgame::engine_signature_second;
+    mp::lobby_update_status(f.lobby, f.panel);
+    expect(mp::panel_control(f.panel, "CD1")->active == 0, "a remote OA player shows no CD icon");
+    remote_block[oa::netgame::player_info_engine_signature_offset] = 0;
+    remote_block[oa::netgame::player_info_engine_signature_offset + 1] = 0;
+    expect(
+        (mp::local_info(f.lobby).status & mp::status::has_disc) != 0,
+        "the local player reports a disc, as a 3.1c host counts them"
+    );
+    expect(
+        oa::netgame::sent_by_open_annihilation(
+            reinterpret_cast<const uint8_t*>(&mp::local_info(f.lobby))
+        ),
+        "the local player's own block carries the engine signature"
+    );
     f.remote_info(0x200, mp::option::ready, 1);
     expect(ready1->value == 1 && ready1->grayed, "a ready remote lights its grayed Go? light");
     mp::slot_info(f.lobby, 1)->status = 0;
     mp::lobby_update_status(f.lobby, f.panel);
     expect(
         mp::panel_control(f.panel, "CD1")->active == 0, "a remote player without a CD shows none"
+    );
+    expect(
+        (mp::local_info(f.lobby).status & mp::status::has_disc) != 0,
+        "the status refresh keeps the local player's disc"
     );
     expect(f.press("READY0"), "READY0 clickable");
     mp::lobby_update_status(f.lobby, f.panel);
@@ -3172,7 +3202,6 @@ void test_view_map_follows_host() {
     lobby.services.play_sound = sound;
     lobby.services.message = message;
     lobby.services.tick = tick;
-    lobby.services.disc_present = disc;
     bind_preview_maps(lobby);
     lobby.local_version_major = 3;
     game->players[0].player_id = 0x200;
@@ -3325,7 +3354,6 @@ void bind_services(mp::Lobby& lobby) {
     lobby.services.play_sound = sound;
     lobby.services.message = message;
     lobby.services.tick = tick;
-    lobby.services.disc_present = disc;
 }
 
 /// Binds a lobby's map services to the test's one map.
@@ -4067,6 +4095,11 @@ void test_recorder_in_the_battle_room() {
             host.loopback.sent[index][1 + oa::netgame::player_info_recorder_protocol_offset] ==
                 oa::netgame::recorder_protocol_current;
     expect(stamped, "every block carries the recorder's protocol");
+    bool signed_by_oa = !infos.empty();
+    for (const auto index : infos)
+        signed_by_oa =
+            signed_by_oa && oa::netgame::sent_by_open_annihilation(&host.loopback.sent[index][1]);
+    expect(signed_by_oa, "every block says Open Annihilation sent it");
 
     // The joiner's first block from a recorder: the options go to it once.
     oa::netgame::PlayerInfoRecord block{};

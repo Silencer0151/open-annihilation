@@ -91,7 +91,7 @@ been served and `tick` is the running match's (0 outside a match), or
 |---|---|
 | `hello` | `version` (1), `engine` (`version`), `automation` (1), `window` (`width`, `height` in the window's pixels), `canvas` (`width`, `height`, and `rect`, `[x, y, w, h]`, where the game's canvas lies in the window: the 640x480 screen on the menus, the whole window in a match), `tick_rate` (30), `fixed_clock` |
 | `screen` | `screen` (`main_menu`, `single_player`, `skirmish`, `map_selection`, `loading`, `match`, `options`, `load_game`, `briefing`, `mp_providers`, `mp_tcp`, `mp_game_list`, `mp_new_game`, `mp_battleroom` and the like; `screen_<id>` for one without a name), `frontend_state`, `dialogs` (the dialogs over the screen whose controls take the pointer, the top one first, by their GUI file's name: `selmap`, `tcp`, `yesorno`, `msgbox` and the like), `focused` (the name of the control that takes the keys, or null), `pointer` (`x`, `y` on the canvas), and in a match `camera` (`x`, `y`, the map pixel at the battlefield's top-left corner; null elsewhere) |
-| `controls` | `screen`, and `controls`: those of the panel that takes the pointer, a dialog's first while one is up (a message box's before the dialog it is over), each with `name` (as the GUI file spells it), `kind` (`button`, `check box`, `list`, `text field`, `slider`, `label`, `area`, `image`), `dialog` (null for the screen's own), `rect` (`[x, y, w, h]` on the canvas), `window_rect` (in the window's pixels), `enabled`, `visible`, `text` and `focused`; a check box adds `checked`; a list adds `items`, `first_visible`, `rows`, `row_height`, `selected` (-1 for none) and `scroll_up` and `scroll_down` (null: a list's scroll bar carries its own arrows). With `screen`, refused `screen_changed` when another is shown |
+| `controls` | `screen`, and `controls`: an extension's windows first (they take the pointer over the screen), then those of the panel that takes the pointer, a dialog's first while one is up (a message box's before the dialog it is over). Each has `name` (as the GUI file spells it, or as the extension spells it), `kind` (`button`, `check box`, `list`, `text field`, `slider`, `label`, `area`, `image`), `dialog` (null for the screen's own and for an extension's), `window` (the extension window's name, or null), `rect` (`[x, y, w, h]` on the canvas), `window_rect` (in the window's pixels), `enabled`, `visible`, `text` and `focused`; a check box adds `checked`; a list adds `items`, `first_visible`, `rows`, `row_height`, `selected` (-1 for none) and `scroll_up` and `scroll_down` (null: a list's scroll bar carries its own arrows). With `screen`, refused `screen_changed` when another is shown |
 | `input` | `consumed` (`frame`, `tick`): the frame and tick at which the game took the events. See below |
 | `prefs` | `path`, the preferences file, and `values`, the preferences as the game holds them now, whether written to the file yet or not; with `names`, a list of keys, only those |
 | `quit` | nothing more; once the answer is written the game quits as a player closing its window does: at once from the menus, through the surrender question in a match |
@@ -260,7 +260,7 @@ text in a code page that is not UTF-8 comes out so: the four bytes of
 | `token.cpp` | the token and its comparison |
 | `endpoint.cpp` | the listener, the connections, the handshake, the order of requests, the answers waiting to be written |
 | `requests.cpp` | the table of operations and their handlers, and the work done each time the endpoint is served |
-| `controls.cpp` | `controls`, and the dialogs and focus `screen` gives: the automation host's controls, and the multiplayer screens' from their panel |
+| `controls.cpp` | `controls`, and the dialogs and focus `screen` gives: the automation host's controls, the multiplayer screens' from their panel, and the windows extensions show |
 | `input.cpp` | `input`: the SDL events pushed, the keys and buttons held, the answer once they are taken |
 | `input_events.cpp` | the device events of an input request, read and checked |
 | `frames.cpp` | the frame request |
@@ -340,6 +340,16 @@ system's sockets elsewhere.
   and its base64, each kind of event as what it
   follows changes, only the kinds wanted, and the game's bytes unchanged
   by any of it.
+- `native-automation-extension-windows`
+  (`tools/check_native_automation_windows.py`) starts the game in the same
+  way with `--fixture-window`. The fixture extension shows a window on the
+  main menu. The endpoint lists that window's button and its clock label
+  ahead of the menu's own controls; a click on the button leaves it reading
+  pressed, with the main menu still up; and the clock label reads the fixed
+  clock's step, one thirtieth of a second, times the frame the answer names,
+  before the click and after it. The fixture is a test extension: only a
+  build configured with `-DOA_RECORD_EXTENSION_HOOKS=ON` combines it and
+  runs this check.
 - `native-automation-digest` (`tools/check_native_automation_digest.py`)
   records a network game the game plays with itself
   (`--net-loopback-check`, `--net-record`) and plays it back in the main

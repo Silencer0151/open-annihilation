@@ -6,7 +6,8 @@
 // SSE2 and memory, and reading this machine's; telling Windows before Vista
 // from its major version; telling a Steam Deck and its screen from the maker
 // and product names, given as text and as DMI folders; and telling Steam's
-// Game Mode from the environment's words.
+// Game Mode from the environment's words; and whether a web address can be
+// opened, which a Steam Deck in Game Mode cannot.
 
 #include "oa/platform/machine.hpp"
 #include "oa/test/scratch_directory.hpp"
@@ -367,6 +368,20 @@ void steam_game_mode_is_told_by_the_environment() {
               << platform::steam_deck_refresh_hz(platform::running_steam_deck_model()) << " Hz\n";
 }
 
+/// A Steam Deck in Game Mode cannot open a web address. A Deck in its
+/// desktop session can, and so can any other machine, Big Picture included.
+void a_steam_deck_in_game_mode_cannot_open_a_web_address() {
+    CHECK(!platform::web_address_available(true, true));
+    CHECK(platform::web_address_available(true, false));
+    CHECK(platform::web_address_available(false, true));
+    CHECK(platform::web_address_available(false, false));
+    const bool steam_deck = platform::running_steam_deck_model() != platform::SteamDeckModel::none;
+    CHECK(
+        platform::web_address_available() ==
+        platform::web_address_available(steam_deck, platform::running_in_steam_game_mode())
+    );
+}
+
 int main() {
     every_raspberry_pi_model_is_one();
     other_boards_are_not();
@@ -381,5 +396,6 @@ int main() {
     dmi_folders_are_read();
     only_linux_reads_the_dmi_folder();
     steam_game_mode_is_told_by_the_environment();
+    a_steam_deck_in_game_mode_cannot_open_a_web_address();
     return failures == 0 ? 0 : 1;
 }

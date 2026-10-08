@@ -469,6 +469,13 @@ and checks them against the frame it composed; and
 plays a recorded network game back in the main loop with and without the
 endpoint, a client reading the match and every event at every frame, and
 requires the same trace stream.
+`native-automation-extension-windows`
+(`tools/check_native_automation_windows.py`) starts the game with `--fark`
+and `--fixture-window`: the endpoint lists the fixture window's controls, a
+click reaches its button, and the window's clock reads the fixed clock's
+step times the frame. The fixture is a test extension, so only a build
+configured with `-DOA_RECORD_EXTENSION_HOOKS=ON` combines it and runs this
+check.
 
 ### The renderer
 
@@ -766,6 +773,74 @@ python3 tools/check_native_game_files.py \
 
 A run without `--check-game-files` and without the hooks never
 opens the screen, so every other check, digest and recording is unchanged.
+
+### The main loop while inactive
+
+An inactive window normally leaves the main loop waiting for an event, so
+nothing runs until the player comes back. An extension can ask it to keep
+running there, and let that go (`keep_running_while_inactive`, version 14
+of the extension table). `native-running-while-inactive` runs
+`--check-running-while-inactive` in a window of the dummy video driver: the
+window loses focus, the request is held, and the frame hook is called on
+three frames; the request is then released and the loop waits, the hook not
+called again, until the check wakes it. The line it prints starts
+`inactive loop check:`.
+
+### Opening a web address
+
+An extension can ask whether this machine can open a web address in the
+system's browser, and can ask the engine to open an http or https address
+(`web_address_available` and `open_web_address`, version 14 of the
+extension table). The answer is no on a Steam Deck in Game Mode, which
+has no browser to hand an address to; a Steam Deck in its desktop session,
+and every other machine, answers yes. Any other scheme is refused and is
+not handed to the browser. `app-web-address` calls the open through a stub
+opener: an http or https address reaches it unchanged, and every other
+scheme is refused. `platform-machine` checks the Steam Deck answer.
+
+### Reading a game file
+
+An extension can read one whole file from the game's files
+(`read_game_file`, version 14 of the extension table). The files are the
+loose files of the folders the run layers, then the archives it mounted. A
+loose file wins over a file of the same path in any archive, a mod's
+archive among them. Where several loose folders are layered, the first that
+holds the path wins, and a mod's folder is layered ahead of the game
+folder. Where only archives hold the path, the earliest mounted archive
+wins. A missing file returns false, and the call does not throw.
+`app-read-game-file` reads a loose fixture file, a file that only a fixture
+archive holds, and a missing path.
+
+### The simulation hash
+
+An extension can read the simulation hash the run plays under
+(`simulation_hash`, version 14 of the extension table): 64 lower-case
+hexadecimal digits. With no mod it is the plain baseline's. Under a mod it
+is that profile's sim hash. A Developer Mode override that changes the
+simulation changes it at once while no match is running; a running match
+keeps the hash it started with until it ends, which is the hash a save of
+that match and the network game are matched on. A display-only override
+leaves it unchanged. The plain baseline is resolved once a process and
+kept: it comes from the rules built into the program alone, so a mod
+switch, a game mode or Developer Mode never changes it.
+`native-simulation-hash` checks the baseline and an override in one start,
+then the first hash again once the settings are put back, and the kept
+baseline against a fresh resolve; `native-simulation-hash-mod` checks a
+profile that changes the simulation, then the same override.
+
+### Modern text for an extension
+
+An extension can read the modern text faces and their fallback chain at a
+pixel size, lay a line out and draw it as coverage, and read the player's
+Use modern fonts for game text and Text size settings (`modern_text_chain`,
+`modern_text_layout`, `modern_text_pixels`, `message_log_text_size`,
+`game_text_preferences_of` and `game_text_preferences`, version 14 of the
+extension table). It can also tell the engine where the focused text field
+is, so the input method's candidate window and the on-screen keyboard stand
+clear of it (`set_focused_text_field`). `app-extension-text` checks the
+message log's face at a text size, that a face's rows at that size are the
+ones the fonts report, that settings written and read come back, and that
+the field's place is handed to a stub in the window's coordinates.
 
 ### Other builds
 

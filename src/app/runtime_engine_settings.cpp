@@ -33,8 +33,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -322,8 +324,14 @@ void Runtime::EngineSettingsState::keep_run_unit_limit(Runtime& runtime) {
         game.max_units_setting = runtime.engine_settings_state().current.unit_limit;
 }
 
-void Runtime::EngineSettingsState::start_skirmish(Runtime& runtime, uint16_t units_per_player) {
-    runtime.bootstrap_match({.units_per_player = units_per_player, .seat_roster = true});
+void Runtime::EngineSettingsState::start_skirmish(
+    Runtime& runtime, uint16_t units_per_player, bool run_unit_limit
+) {
+    runtime.bootstrap_match(
+        {.units_per_player = units_per_player,
+         .seat_roster = true,
+         .run_unit_limit = run_unit_limit}
+    );
 }
 
 uint16_t Runtime::EngineSettingsState::restart_unit_limit(Runtime& runtime) {
@@ -561,6 +569,31 @@ oa::present::TextStyle Runtime::text_style() const {
     if (language_needs_modern_fonts())
         style.modern_fonts = true;
     return style;
+}
+
+GameTextPreferences game_text_preferences(const Runtime& runtime) noexcept {
+    // The settings may not exist yet, and building their defaults allocates:
+    // a failure gives the defaults rather than ending the program, and says
+    // why once a run, so that a broken setting is not silent.
+    static std::atomic<bool> reported{false};
+    const auto report = [](const char* why) noexcept {
+        if (!reported.exchange(true))
+            std::fprintf(
+                stderr,
+                "open-annihilation: the text settings could not be read, so extensions draw "
+                "at the defaults: %s\n",
+                why
+            );
+    };
+    try {
+        const oa::present::TextStyle style = runtime.text_style();
+        return game_text_preferences_of(style.modern_fonts, style.size);
+    } catch (const std::exception& error) {
+        report(error.what());
+    } catch (...) {
+        report("an unknown error");
+    }
+    return GameTextPreferences{};
 }
 
 bool Runtime::unicode_chat_on() const {
@@ -1302,6 +1335,45 @@ Runtime::engine_settings_dialog_key(uint32_t key, uint16_t modifiers) noexcept {
     default:
         return std::nullopt;
     }
+}
+
+void Runtime::release_unsaved_unit_limit() {
+    if (!unsaved_unit_limit_playing_)
+        return;
+    unsaved_unit_limit_playing_ = false;
+    if (unsaved_unit_limit_pending_)
+        return;
+    frontend_game().max_units_setting = engine_settings_state().current.unit_limit;
+}
+
+void set_unit_limit(Runtime& runtime, int32_t units_per_player, SettingScope scope) {
+    const auto& units = runtime.limits_.units_per_player;
+    const int64_t lowest = units.minimum;
+    const int64_t highest = settings::highest_offered_unit_limit(units);
+    const int64_t clamped = std::clamp(static_cast<int64_t>(units_per_player), lowest, highest);
+    const auto kept = static_cast<uint16_t>(clamped);
+    switch (scope) {
+    case SettingScope::next_game:
+        // The next new game plays at it, and that match's teardown puts the
+        // player's setting back.
+        runtime.frontend_game().max_units_setting = kept;
+        runtime.unsaved_unit_limit_pending_ = true;
+        return;
+    case SettingScope::immediate:
+        runtime.frontend_game().max_units_setting = kept;
+        runtime.unsaved_unit_limit_pending_ = false;
+        runtime.engine_settings_state().current.unit_limit = kept;
+        break;
+    case SettingScope::next_restart:
+        // The setting, as Settings shows it, and the preferences take it; the
+        // run's limit stays as it is until the game next starts.
+        runtime.engine_settings_state().current.unit_limit = kept;
+        break;
+    }
+    runtime.preference_values_[std::string(settings::key::unit_limit)] = std::to_string(kept);
+    runtime.preferences_dirty_ = true;
+    if (const auto failure = Runtime::EngineSettingsState::flush(runtime))
+        Runtime::EngineSettingsState::report_failed_save(runtime, *failure);
 }
 
 } // namespace oa::app

@@ -407,7 +407,7 @@ bool Runtime::feature_sequence_frame(
 
 void Runtime::apply_skirmish_players() {
     // A new skirmish plays at the run's unit limit.
-    EngineSettingsState::start_skirmish(*this, EngineSettingsState::run_unit_limit(*this));
+    EngineSettingsState::start_skirmish(*this, EngineSettingsState::run_unit_limit(*this), true);
 }
 
 void Runtime::seat_skirmish_roster(oa::World& world) {
@@ -1073,6 +1073,14 @@ void Runtime::bootstrap_match(const MatchBootstrap& bootstrap) {
         if (const char* refused = oa::sim::match_runtime::Match::input_error(inputs))
             throw std::runtime_error(std::string("cannot start the match: ") + refused);
         match_ = std::make_unique<oa::sim::match_runtime::Match>(inputs, offline_services_);
+        // A next-game unit limit an extension set belongs to the next new
+        // game: a match at the run's limit, or a multiplayer game, which a
+        // joined one ends though it plays at its host's limit. A match that
+        // brings its own limit leaves it for the game that asked for it.
+        const bool new_game = bootstrap.run_unit_limit || bootstrap.multiplayer;
+        unsaved_unit_limit_playing_ = new_game && unsaved_unit_limit_pending_;
+        if (new_game)
+            unsaved_unit_limit_pending_ = false;
         game_speed_lock_.reset();
         raise_match_fault(*match_);
         std::vector<oa::sim::spatial_state::Plot>().swap(collision_plots);

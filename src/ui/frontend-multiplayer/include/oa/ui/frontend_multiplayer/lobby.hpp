@@ -116,11 +116,12 @@ struct PlayerSetupInfo {
     uint8_t version_major{};
     uint8_t version_minor{};
     uint32_t map_hash{};
-    uint8_t reserved_after_map_hash[0x07]{}; // copied with the block; never read
-    uint8_t recorder_protocol{};             // the sender's recorder version, 0 for none
-    uint8_t chat_signature[2]{};             // 'U', '8' when chat_flags holds the sender's chat
-    uint8_t chat_flags{};                    // netgame::chat_flag_utf8, read after chat_signature
-    uint8_t reserved_after_chat_flags{};     // copied with the block; never read
+    uint8_t engine_signature[2]{};            // 'O', 'A' when OA sent the block
+    uint8_t reserved_after_signature[0x05]{}; // copied with the block; never read
+    uint8_t recorder_protocol{};              // the sender's recorder version, 0 for none
+    uint8_t chat_signature[2]{};              // 'U', '8' when chat_flags holds the sender's chat
+    uint8_t chat_flags{};                     // netgame::chat_flag_utf8, read after chat_signature
+    uint8_t reserved_after_chat_flags{};      // copied with the block; never read
 };
 
 #pragma pack(pop)
@@ -146,7 +147,8 @@ OA_ASSERT_OFFSET(PlayerSetupInfo, max_units, 0xa5);
 OA_ASSERT_OFFSET(PlayerSetupInfo, version_major, 0xa7);
 OA_ASSERT_OFFSET(PlayerSetupInfo, version_minor, 0xa8);
 OA_ASSERT_OFFSET(PlayerSetupInfo, map_hash, 0xa9);
-OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_map_hash, 0xad);
+OA_ASSERT_OFFSET(PlayerSetupInfo, engine_signature, 0xad);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_signature, 0xaf);
 OA_ASSERT_OFFSET(PlayerSetupInfo, recorder_protocol, 0xb4);
 OA_ASSERT_OFFSET(PlayerSetupInfo, chat_signature, 0xb5);
 OA_ASSERT_OFFSET(PlayerSetupInfo, chat_flags, 0xb7);
@@ -221,7 +223,6 @@ struct LobbyServices {
     // turns over to 0 past base::game_loop::scaled_clock_turn; the lobby's
     // timers compare its readings with lobby_clock_passed.
     uint32_t (*tick)(void* context){};
-    bool (*disc_present)(void* context){};
     int32_t (*display_modes)(void* context, DisplayMode* out, int32_t capacity){};
     // Lobby notifications the game reacts to (sound cues): 2 player added,
     // 4 side or alliance changed, 5 map changed, 10 game starting.

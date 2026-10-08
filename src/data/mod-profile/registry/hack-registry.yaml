@@ -131,6 +131,14 @@ entries:
     scope: sim
     key: revision-archive
     value: {type: string, max-length: 64, baseline: rev31.gp3, scope: sim}
+  layout.installation-archives:
+    kind: layout
+    area: paths
+    summary: "Archives from the game installation, mounted in the order written after the mod's own ccx and ufo archives and before the hpi group; a name here is not also mounted with its group."
+    ownership: all-machines
+    scope: sim
+    key: installation-archives
+    value: {type: list<string>, length: [0, 16], max-length: 64, distinct: true, pattern: '^(?!\.\.?$)[^/\\:]+$', baseline: [], scope: sim}
   layout.directories.gamedata:
     kind: layout
     area: paths

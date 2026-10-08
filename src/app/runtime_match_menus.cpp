@@ -3502,7 +3502,7 @@ void Runtime::restart_match() {
     // run's limit is now.
     host.apply_roster = [](void* context) {
         restart_do(context, [](RestartRun& run) {
-            EngineSettingsState::start_skirmish(*run.runtime, run.units_per_player);
+            EngineSettingsState::start_skirmish(*run.runtime, run.units_per_player, false);
         });
     };
     host.enter_frontend = [](void* context, bool in_game) {

@@ -187,6 +187,10 @@ const fs::path& Runtime::user_folder() const noexcept {
     return user_folder_;
 }
 
+const fs::path& player_folder(const Runtime& runtime) noexcept {
+    return runtime.user_folder();
+}
+
 std::string_view Runtime::files_mod_id() const noexcept {
     return options_.mod_profile ? std::string_view(options_.mod_profile->id) : std::string_view{};
 }

@@ -3137,6 +3137,9 @@ void net_match_send_player_status(NetMatch* m, bool machine_groups) noexcept {
         status.info_tail[player_info_recorder_protocol_offset - player_info_tail_offset] =
             recorder_protocol_plain;
         announce_unicode_chat(status, m->unicode_chat);
+        // An in-game block says it is OA's as the battle room's do, so the
+        // remote copies that replace those blocks keep the signature.
+        stamp_engine_signature(status);
         send_record(m, p.player_id, broadcast_destination_id, status);
         PlayerTeamRecord team{};
         team.player_id = p.player_id;

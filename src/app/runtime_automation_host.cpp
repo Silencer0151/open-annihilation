@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -28,6 +29,52 @@ namespace oa::app {
 namespace {
 
 namespace gui = oa::ui::gui_layout;
+
+// How many of an extension's windows, and of their controls, one answer lists.
+constexpr std::size_t kMaxExtensionWindows = 32;
+constexpr std::size_t kMaxExtensionControls = 512;
+// How much of a name, a caption or a list row the answer keeps.
+constexpr std::size_t kMaxControlName = 64;
+constexpr std::size_t kMaxControlText = 1024;
+constexpr std::size_t kMaxListItems = 256;
+constexpr std::size_t kMaxItemText = 256;
+
+/// Keeps a text within a limit, in bytes.
+///
+/// @param text the text
+/// @param limit the most bytes kept
+/// @return the text, cut off past the limit
+std::string bounded_text(std::string text, std::size_t limit) {
+    if (text.size() > limit)
+        text.resize(limit);
+    return text;
+}
+
+/// Returns the driver's kind for an extension's control.
+///
+/// @param kind the extension's kind
+/// @return the driver's; nothing for a kind it does not name
+std::optional<AutomationControlKind> mapped_kind(ExtensionControlKind kind) noexcept {
+    switch (kind) {
+    case ExtensionControlKind::button:
+        return AutomationControlKind::button;
+    case ExtensionControlKind::check_box:
+        return AutomationControlKind::check_box;
+    case ExtensionControlKind::list:
+        return AutomationControlKind::list;
+    case ExtensionControlKind::text_field:
+        return AutomationControlKind::text_field;
+    case ExtensionControlKind::slider:
+        return AutomationControlKind::slider;
+    case ExtensionControlKind::label:
+        return AutomationControlKind::label;
+    case ExtensionControlKind::area:
+        return AutomationControlKind::area;
+    case ExtensionControlKind::image:
+        return AutomationControlKind::image;
+    }
+    return std::nullopt;
+}
 
 /// Where a panel's gadgets lie on the canvas, and what the collected
 /// controls of one panel share.
@@ -475,6 +522,67 @@ struct AutomationHostAccess {
     /// @param context AutomationHost::context
     /// @return the digest, as Runtime::match_world_digest gives it
     static uint64_t match_digest(void* context) { return runtime(context).match_world_digest(); }
+
+    /// Collects the controls of the windows extensions show (AutomationHost::windows).
+    ///
+    /// @param context AutomationHost::context
+    /// @param[out] controls replaced by the controls
+    static void windows(void* context, std::vector<AutomationControl>* controls) {
+        controls->clear();
+        const auto& game = runtime(context);
+        const auto sources = game.extension_window_sources_;
+        std::size_t windows_kept = 0;
+        std::size_t controls_kept = 0;
+        for (const auto& slot : sources) {
+            if (slot.source == nullptr)
+                continue;
+            std::vector<ExtensionWindow> listed;
+            slot.source(slot.context, game, listed);
+            for (const ExtensionWindow& window : listed) {
+                if (windows_kept >= kMaxExtensionWindows)
+                    return;
+                const std::string name = bounded_text(window.name, kMaxControlName);
+                if (name.empty())
+                    continue;
+                ++windows_kept;
+                for (const ExtensionControl& source : window.controls) {
+                    if (controls_kept >= kMaxExtensionControls)
+                        return;
+                    const auto kind = mapped_kind(source.kind);
+                    const std::string control_name = bounded_text(source.name, kMaxControlName);
+                    if (!kind || control_name.empty())
+                        continue;
+                    AutomationControl control;
+                    control.name = control_name;
+                    control.kind = *kind;
+                    control.window = name;
+                    control.x = source.x;
+                    control.y = source.y;
+                    control.width = source.width;
+                    control.height = source.height;
+                    control.visible = source.visible;
+                    control.enabled = source.enabled;
+                    control.focused = source.focused;
+                    control.checked = source.checked;
+                    control.text = bounded_text(source.text, kMaxControlText);
+                    if (*kind == AutomationControlKind::list) {
+                        const std::size_t count = std::min(source.items.size(), kMaxListItems);
+                        control.items.reserve(count);
+                        for (std::size_t index = 0; index < count; ++index)
+                            control.items.push_back(
+                                bounded_text(source.items[index], kMaxItemText)
+                            );
+                        control.first_visible = std::max<int32_t>(0, source.first_visible);
+                        control.row_height = source.row_height;
+                        control.rows = source.rows;
+                        control.selected = source.selected;
+                    }
+                    controls->push_back(std::move(control));
+                    ++controls_kept;
+                }
+            }
+        }
+    }
 };
 
 namespace {
@@ -486,6 +594,7 @@ constexpr AutomationHost kAutomationHostEntries{
     AutomationHostAccess::preferences_file,
     AutomationHostAccess::match_game,
     AutomationHostAccess::controls,
+    AutomationHostAccess::windows,
     AutomationHostAccess::hold_key,
     AutomationHostAccess::hold_buttons,
     AutomationHostAccess::start_frame_capture,
@@ -495,7 +604,7 @@ constexpr AutomationHost kAutomationHostEntries{
 };
 
 // The entries above, one for each of the table's after its context.
-constexpr std::size_t kAutomationHostEntryCount = 10;
+constexpr std::size_t kAutomationHostEntryCount = 11;
 static_assert(
     sizeof(AutomationHost) == sizeof(void*) * (1 + kAutomationHostEntryCount),
     "the automation host's entries changed: set every one of them here"
@@ -507,6 +616,38 @@ AutomationHost automation_host(Runtime& runtime) {
     AutomationHost host = kAutomationHostEntries;
     host.context = &runtime;
     return host;
+}
+
+void set_extension_window_source(Runtime& runtime, void* context, ExtensionWindowSource source) {
+    // How many extensions may show windows at once.
+    constexpr std::size_t kMaxSources = 16;
+    auto& sources = runtime.extension_window_sources_;
+    const auto found = std::find_if(sources.begin(), sources.end(), [&](const auto& slot) {
+        return slot.context == context;
+    });
+    if (source == nullptr) {
+        if (found != sources.end())
+            sources.erase(found);
+        return;
+    }
+    if (found != sources.end()) {
+        found->source = source;
+        return;
+    }
+    if (sources.size() >= kMaxSources)
+        return;
+    sources.push_back({context, source});
+}
+
+uint32_t extension_clock(const Runtime& runtime) {
+    if (runtime.options_.fixed_clock)
+        return runtime.clock_milliseconds();
+    if (runtime.options_.remote_controlled)
+        return runtime.extension_clock_frame_ * kFixedClockMsPerTick;
+    return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch()
+    )
+                                     .count());
 }
 
 } // namespace oa::app

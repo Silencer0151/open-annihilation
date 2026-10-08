@@ -52,21 +52,24 @@ enum class AutomationControlKind : uint8_t {
     image,      ///< a picture that takes no pointer
 };
 
-/// One control of the screen shown, or of a dialog over it.
+/// One control of the screen shown, of a dialog over it, or of a window an extension shows.
 struct AutomationControl {
-    std::string name;             ///< as the GUI file spells it
+    std::string name;             ///< as the GUI file spells it, or as the extension spells it
     AutomationControlKind kind{}; ///< what it is
     std::string
-        dialog;       ///< the dialog it belongs to, by its panel's name; empty for the screen's own
-    int32_t x{};      ///< its left column on the canvas
-    int32_t y{};      ///< its top row on the canvas
-    int32_t width{};  ///< its width in canvas pixels
-    int32_t height{}; ///< its height in canvas pixels
-    bool visible{};   ///< it is shown
-    bool enabled{};   ///< it is shown and not grayed out
-    bool focused{};   ///< it holds the keyboard focus
-    bool checked{};   ///< a check box is checked
-    std::string text; ///< its caption, its label's text or a field's typed text
+        dialog; ///< the dialog it belongs to, by its panel's name; empty for the screen's own
+    /// The extension window it belongs to, as the extension spells it; empty
+    /// for the screen's own controls and a dialog's.
+    std::string window;
+    int32_t x{};                    ///< its left column on the canvas
+    int32_t y{};                    ///< its top row on the canvas
+    int32_t width{};                ///< its width in canvas pixels
+    int32_t height{};               ///< its height in canvas pixels
+    bool visible{};                 ///< it is shown
+    bool enabled{};                 ///< it is shown and not grayed out
+    bool focused{};                 ///< it holds the keyboard focus
+    bool checked{};                 ///< a check box is checked
+    std::string text;               ///< its caption, its label's text or a field's typed text
     std::vector<std::string> items; ///< a list's rows
     int32_t first_visible{};        ///< a list's first row shown
     int32_t rows{};                 ///< the rows a list shows at once
@@ -106,6 +109,15 @@ struct AutomationHost {
     /// @param context AutomationHost::context
     /// @param[out] controls replaced by the controls, in the panel's order
     void (*controls)(void* context, std::vector<AutomationControl>* controls){};
+    /// Collects the controls of the windows extensions show over the game,
+    /// from the sources the extensions registered (set_extension_window_source).
+    /// They take the pointer over the screen, so the endpoint lists them
+    /// ahead of the screen's own controls. Changes nothing.
+    ///
+    /// @param context AutomationHost::context
+    /// @param[out] controls replaced by the controls, the windows in
+    ///        registration order and each window's controls in its own order
+    void (*windows)(void* context, std::vector<AutomationControl>* controls){};
     /// Holds a key down for the game's reads of the keys held, or lets it
     /// go, as the keyboard holds one between its key events. What the
     /// endpoint holds is kept for the process and outlives the runtime.

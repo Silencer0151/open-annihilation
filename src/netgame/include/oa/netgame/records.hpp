@@ -305,6 +305,47 @@ inline constexpr std::size_t player_info_color_offset = 0x96; // block offset, t
 /// the sender runs (recorder_protocol_current), 0 for none. 3.1c carries the
 /// byte unchanged and never reads it.
 inline constexpr std::size_t player_info_recorder_protocol_offset = 0xb4;
+/// Block offset of the two bytes, 'O' and 'A', that say Open Annihilation sent
+/// the block. 3.1c carries them unchanged and never reads them.
+inline constexpr std::size_t player_info_engine_signature_offset = 0xad;
+/// The engine signature's bytes.
+inline constexpr uint8_t engine_signature_first = 'O';
+inline constexpr uint8_t engine_signature_second = 'A';
+
+/// Writes the engine signature's two bytes, the one place that does.
+///
+/// @param[out] at where the signature's first byte goes
+inline void write_engine_signature(uint8_t* at) noexcept {
+    at[0] = engine_signature_first;
+    at[1] = engine_signature_second;
+}
+
+/// Marks a setup block as Open Annihilation's, in the block the machine keeps,
+/// so that every copy and every send of it carries the signature.
+///
+/// @param[in,out] block the 0xb9-byte block, as a player's PlayerSetupInfo holds it
+inline void mark_engine_signature(uint8_t* block) noexcept {
+    write_engine_signature(block + player_info_engine_signature_offset);
+}
+
+/// Stamps the engine signature on a setup block about to be sent (record 0x20).
+///
+/// @param[in,out] record the block, as record 0x20 carries it
+inline void stamp_engine_signature(PlayerInfoRecord& record) noexcept {
+    write_engine_signature(
+        record.info_tail + (player_info_engine_signature_offset - player_info_tail_offset)
+    );
+}
+
+/// Tells whether a setup block says Open Annihilation sent it.
+///
+/// @param block the 0xb9-byte block, as a player's PlayerSetupInfo holds it; null is not
+/// @return true when the engine signature is there
+[[nodiscard]] inline bool sent_by_open_annihilation(const uint8_t* block) noexcept {
+    return block != nullptr &&
+           block[player_info_engine_signature_offset] == engine_signature_first &&
+           block[player_info_engine_signature_offset + 1] == engine_signature_second;
+}
 
 /// Returns the map hash stored at player_info_map_hash_offset of a player info record.
 [[nodiscard]] inline uint32_t player_info_map_hash(const PlayerInfoRecord& r) noexcept {

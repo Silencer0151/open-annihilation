@@ -126,8 +126,16 @@ profile format and every standard hack.
 
 ## Network games from the command line
 
-Network play goes through the Multiplayer screens, as in 3.1c. To host or
-join a TCP/IP game without them, start the game with:
+Network play goes through the Multiplayer screens, as in 3.1c, but asks
+for no game disc: START never counts discs. Every OA player still tells the
+other machines it has one, since a 3.1c host counts them, and the battle
+room shows a CD icon only for a player on 3.1c. OA tells its own players
+from those on 3.1c by the setup block each sends (record 0x20): OA writes
+`O` and `A` at +0xAD and +0xAE, bytes 3.1c carries unchanged and never
+reads. An OA build older than this one writes no mark, so its players show
+a CD icon too.
+
+To host or join a TCP/IP game without the screens, start the game with:
 
 - `--host`: creates a game and opens its battle room.
 - `--join ADDRESS`: joins the game at `ADDRESS`, an IPv4 address or a host

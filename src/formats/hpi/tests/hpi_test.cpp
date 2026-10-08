@@ -630,6 +630,53 @@ void asset_store_discover_pins_install_layout() {
     );
 }
 
+// A named installation archive that only a removable root holds is mounted
+// from there, in the list's slot, and the disc scan does not mount it again.
+// A name nothing holds is reported missing.
+void asset_store_discover_installation_archive_on_disc_root() {
+    TempDir dir;
+    const auto root = dir.path() / "game";
+    const auto disc = dir.path() / "disc";
+    fs::create_directories(root);
+    fs::create_directories(disc);
+    const auto write = [](const fs::path& path, const std::vector<uint8_t>& bytes) {
+        std::ofstream(path, std::ios::binary)
+            .write(
+                reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size())
+            );
+    };
+    write(root / "mod.ccx", archive_of({{"maps/shared.ota", text("mod.ccx"), 0}}));
+    write(root / "game.hpi", archive_of({{"maps/shared.ota", text("game.hpi"), 0}}));
+    write(disc / "Worlds.HPI", archive_of({{"maps/world.ota", text("worlds"), 0}}));
+
+    oa::DiscoveryPlan plan;
+    plan.installation_archives = {"worlds.hpi"};
+    oa::AssetStore store(root);
+    const fs::path disc_roots[]{disc};
+    const auto report = store.discover(plan, disc_roots);
+    std::vector<std::string> mounted;
+    for (const auto& path : store.mount_paths())
+        mounted.push_back(path.filename().string());
+    const std::vector<std::string> expected{"mod.ccx", "Worlds.HPI", "game.hpi"};
+    check(mounted == expected, "a disc-root installation archive mounts in the list's slot, once");
+    bool missing = false;
+    for (const auto& outcome : report)
+        missing = missing || !outcome.error.empty();
+    check(!missing, "a disc-root installation archive is not reported missing");
+    check(store.read("maps/world.ota").bytes == text("worlds"), "the disc-root archive is read");
+
+    oa::DiscoveryPlan absent;
+    absent.installation_archives = {"absent.hpi"};
+    oa::AssetStore other(root);
+    bool reported = false;
+    for (const auto& outcome : other.discover(absent, disc_roots))
+        reported = reported || outcome.error == "installation archive 'absent.hpi' is missing";
+    check(reported, "a name no folder or root holds is reported missing");
+    check(oa::same_archive_file_name("Worlds.HPI", "worlds.hpi"), "names match without case");
+    check(!oa::same_archive_file_name("worlds.hpi", "worlds.ufo"), "other names do not match");
+}
+
 // The groups discovery scans the game directory in, in scan order.
 enum class ArchiveGroup : uint8_t { revision, ccx, ufo, hpi, none };
 
@@ -1026,6 +1073,7 @@ int main(int argc, char** argv) {
         asset_store_find_and_shadowing();
         asset_store_discover_order_and_hpi_limit();
         asset_store_discover_pins_install_layout();
+        asset_store_discover_installation_archive_on_disc_root();
         asset_store_loose_listings();
         asset_store_names_in_any_script();
         asset_store_loose_links();

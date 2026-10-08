@@ -1634,7 +1634,11 @@ int main() {
         "the host's colour square shows its colour"
     );
     expect(shows_version(d, art, "LOGO0", "3.1"), "the host's version is centred on its square");
-    expect(shows_frame(d, art, disc, 0, control("CD0")), "the host's CD icon");
+    expect(
+        control("CD0") != nullptr && control("CD0")->active == 0 &&
+            !shows_frame(d, art, disc, 0, control("CD0")),
+        "the host's row shows no CD icon"
+    );
     expect(
         control("SIDE0") != nullptr &&
             shows_frame(d, art, sides, control("SIDE0")->stage, control("SIDE0")),
@@ -2432,7 +2436,10 @@ int main() {
     // so it has no colour; its version still shows.
     const auto own = std::to_string(lobby.game->local_player_index);
     expect(shows_frame(d, art, checkbox, 0, control("READY" + own)), "the client's Go? light");
-    expect(shows_frame(d, art, disc, 0, control("CD" + own)), "the client's CD icon");
+    expect(
+        control("CD" + own) != nullptr && control("CD" + own)->active == 0,
+        "the client's row shows no CD icon"
+    );
     expect(
         control("LOGO" + own) != nullptr && control("LOGO" + own)->active == 0,
         "the client has no colour yet"
@@ -2610,7 +2617,7 @@ int main() {
     );
     expect(shows_color(d, art, "LOGO" + row, 1, "3.1"), "the remote player's colour square");
     expect(shows_version(d, art, "LOGO" + row, "3.1"), "the remote player's version");
-    expect(shows_frame(d, art, disc, 0, control("CD" + row)), "the remote player's CD icon");
+    expect(shows_frame(d, art, disc, 0, control("CD" + row)), "a remote 3.1c player's CD icon");
     expect(!door->hot, "the doors stop taking clicks once everyone is ready");
     expect(
         start->active == 0 && synching->active != 0,

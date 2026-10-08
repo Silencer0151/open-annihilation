@@ -110,7 +110,9 @@ struct GameInstall {
 /// or reused from there (set_up_demo()); that checked archive is then the
 /// only one taken, from the folder it lies in, whatever other archives the
 /// folder holds. An archive that fails to mount is reported on stderr and
-/// skipped and recorded in GameInstall::skipped. A non-empty `overlay` is
+/// skipped and recorded in GameInstall::skipped. A named installation archive
+/// that is missing or cannot be opened is that, and also a profile error, so
+/// the folder is unusable. A non-empty `overlay` is
 /// laid over the folder first, as a mod folder is, ahead of the mod folder.
 ///
 /// @param root candidate game folder

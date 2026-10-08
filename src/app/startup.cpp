@@ -281,6 +281,7 @@ void check_game_files_options(Options& options) {
         {!options.check_unit_pages.empty(), "--check-unit-pages"},
         {options.check_kill_board, "--check-kill-board"},
         {options.check_paused_save, "--check-paused-save"},
+        {options.check_simulation_hash, "--check-simulation-hash"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
         {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
@@ -291,6 +292,7 @@ void check_game_files_options(Options& options) {
         {options.check_radar_orders, "--check-radar-orders"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
+        {options.check_running_while_inactive, "--check-running-while-inactive"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
     };
     for (const auto& [given, name] : refused)
@@ -489,6 +491,7 @@ void check_director_options(Options& options) {
         {!options.check_unit_pages.empty(), "--check-unit-pages"},
         {options.check_kill_board, "--check-kill-board"},
         {options.check_paused_save, "--check-paused-save"},
+        {options.check_simulation_hash, "--check-simulation-hash"},
         {!options.check_unit_language.empty(), "--check-unit-language"},
         {options.check_language_switch, "--check-language-switch"},
         {options.check_patrol_reclaim, "--check-patrol-reclaim"},
@@ -499,6 +502,7 @@ void check_director_options(Options& options) {
         {options.check_radar_orders, "--check-radar-orders"},
         {options.check_touch_controls, "--check-touch-controls"},
         {options.check_pad_controls, "--check-pad-controls"},
+        {options.check_running_while_inactive, "--check-running-while-inactive"},
         {options.check_multiplayer_menu, "--check-multiplayer-menu"},
         {options.check_director_view, "--check-director-view"},
         {options.check_director_render, "--check-director-render"},
@@ -832,6 +836,8 @@ namespace {
             result.check_kill_board = true;
         else if (argument == "--check-paused-save")
             result.check_paused_save = true;
+        else if (argument == "--check-simulation-hash")
+            result.check_simulation_hash = true;
         else if (argument == "--check-unit-language")
             result.check_unit_language = value(argument);
         else if (argument == "--check-language-switch")
@@ -852,6 +858,8 @@ namespace {
             result.check_touch_controls = true;
         else if (argument == "--check-pad-controls")
             result.check_pad_controls = true;
+        else if (argument == "--check-running-while-inactive")
+            result.check_running_while_inactive = true;
         else if (argument == "--touch-controls")
             result.touch_controls = true;
         else if (argument == "--check-game-files")
@@ -928,7 +936,7 @@ namespace {
                    "[--check-download-builds] [--check-stockpile-builds] "
                    "[--check-unit-page-memory] [--check-side-column] [--check-match-bars] "
                    "[--check-unit-pages whole|scaled:TYPE,...] "
-                   "[--check-kill-board] "
+                   "[--check-kill-board] [--check-simulation-hash] "
                    "[--check-unit-language TAG] "
                    "[--check-language-switch] "
                    "[--check-patrol-reclaim] [--check-reclaim-cursor] [--check-build-preview] "
@@ -943,7 +951,7 @@ namespace {
                    "[--check-renderer-ladder [--render-fault POINT[@FRAME]]] "
                    "[--check-briefing-narration] [--check-director-view] "
                    "[--check-director-render] [--check-interpolation] "
-                   "[--check-unit-playout] "
+                   "[--check-unit-playout] [--check-running-while-inactive] "
                    "[--trace-input] "
                 << extension_text(extension, ExtensionText::usage_checks, "")
                 << "[--debug-order-lines] "
@@ -1085,6 +1093,11 @@ namespace {
         throw std::runtime_error(
             "--check-render-tiers draws in a window and cannot be used with --headless-check"
         );
+    if (result.check_running_while_inactive && result.headless_check)
+        throw std::runtime_error(
+            "--check-running-while-inactive keeps a window and cannot be used with "
+            "--headless-check"
+        );
     if (result.force_capable && !result.check_render_tiers && !result.check_build_preview &&
         !result.check_engine_settings && !result.check_kill_board)
         throw std::runtime_error(
@@ -1107,8 +1120,9 @@ namespace {
         result.check_patrol_reclaim || result.check_reclaim_cursor || result.check_build_preview ||
         result.check_pointer_interfaces || result.check_megamap_clicks ||
         result.check_radar_orders || result.check_touch_controls || result.check_pad_controls ||
-        result.check_director_view || result.check_director_render || result.check_interpolation ||
-        result.check_unit_playout || result.check_paused_save;
+        result.check_running_while_inactive || result.check_director_view ||
+        result.check_director_render || result.check_interpolation || result.check_unit_playout ||
+        result.check_paused_save || result.check_simulation_hash;
     // A capture and a showcase need the application's own loop and window,
     // which checks and benchmarks do not run.
     const bool check_run = result.fixed_clock || result.check_navigation ||

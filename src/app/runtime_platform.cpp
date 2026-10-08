@@ -111,6 +111,10 @@ bool Runtime::keeps_running_inactive() const {
            (match_ && (match_->state().game.session_flags & kLiveGame) != 0);
 }
 
+void keep_running_while_inactive(Runtime& runtime, bool hold) {
+    runtime.keep_running_while_inactive_ = hold;
+}
+
 void Runtime::quit_application(const char* message) {
     exit_requested_ = true;
     if (message == nullptr || *message == '\0')

@@ -3084,6 +3084,30 @@ bool block_says_utf8(SeatedMachine& m, uint8_t slot) {
     return announces_unicode_chat(reinterpret_cast<const uint8_t*>(&m.info(slot)));
 }
 
+// Every block a match sends carries the engine signature, so a remote OA
+// player's block, replaced by those blocks during the match, still says it
+// is OA's afterwards.
+void engine_signature_in_game_blocks() {
+    start_case("engine_signature_in_game_blocks");
+    constexpr uint32_t kA = 7, kB = 9;
+    const Seat a_view[4] = {{kA, OA_PLAYER_STATUS_LOCAL, 1}, {kB, OA_PLAYER_STATUS_MIRRORED, 2}};
+    const Seat b_view[4] = {{kA, OA_PLAYER_STATUS_MIRRORED, 1}, {kB, OA_PLAYER_STATUS_LOCAL, 2}};
+    SeatedMachine a(a_view, 0);
+    SeatedMachine b(b_view, 1);
+    join(a, b);
+    net_match_send_player_status(a.match.get(), false);
+    net_match_send_player_status(b.match.get(), false);
+    const auto blocks = a.sent(RecordType::player_info);
+    CHECK(!blocks.empty());
+    if (!blocks.empty())
+        CHECK(sent_by_open_annihilation(blocks[0].bytes.data() + 1));
+    packet_layer_flush(b.connection.packets, 0, true);
+    (void)net_match_pump(a.match.get());
+    (void)net_match_pump(b.match.get());
+    CHECK(sent_by_open_annihilation(reinterpret_cast<const uint8_t*>(&a.info(1))));
+    CHECK(sent_by_open_annihilation(reinterpret_cast<const uint8_t*>(&b.info(0))));
+}
+
 // Two machines with Unicode chat on, both Chinese: each says so in the
 // setup block it sends (its chat signature and flags) and learns it of the
 // other. A Chinese line longer than a record goes as four records, each
@@ -4641,6 +4665,7 @@ int main() {
     client_computer_is_a_session_player();
     address_picks_the_enumeration_target();
     private_lines_stay_hidden();
+    engine_signature_in_game_blocks();
     unicode_chat_between_two_readers();
     unicode_chat_in_a_mixed_room();
     unicode_chat_reads_malformed_lines_safely();

@@ -186,9 +186,15 @@ uint32_t now(Lobby& lobby) noexcept {
     return lobby.services.tick != nullptr ? lobby.services.tick(lobby.services.context) : 0;
 }
 
-bool disc_present(Lobby& lobby) noexcept {
-    return lobby.services.disc_present != nullptr &&
-           lobby.services.disc_present(lobby.services.context);
+/// Marks the local player's block as OA's: it holds a game disc and carries
+/// the engine signature. OA asks for no disc, but a 3.1c host still counts
+/// them before START, so every OA player reports one. The signature is kept
+/// in the block itself, so the blocks a match sends carry it too.
+///
+/// @param info the local player's block
+void mark_local_block(PlayerSetupInfo& info) noexcept {
+    info.status = static_cast<uint16_t>(info.status | status::has_disc);
+    netgame::mark_engine_signature(reinterpret_cast<uint8_t*>(&info));
 }
 
 bool map_selected(Lobby& lobby) noexcept {
@@ -1673,8 +1679,16 @@ void lobby_update_status(Lobby& lobby, Panel& panel) noexcept {
             continue;
         }
         const bool present = occupied_by(player, kSlotLocal) || slot_remote_playing(lobby, player);
+        // OA asks for no game disc, so an OA player's row shows no CD icon. A
+        // player on 3.1c still shows the disc it has: a 3.1c host counts them
+        // before START.
+        const bool open_annihilation =
+            occupied_by(player, kSlotLocal) ||
+            netgame::sent_by_open_annihilation(reinterpret_cast<const uint8_t*>(&info));
         format(name, "CD%d", slot);
-        panel_set_active(panel, name, present && (info.status & status::has_disc) != 0);
+        panel_set_active(
+            panel, name, present && !open_annihilation && (info.status & status::has_disc) != 0
+        );
         panel_set_grayed(panel, name, false);
         if (auto* logo = row_control(panel, "LOGO%d", slot)) {
             logo->active = (info.color == kNoColor && my_ready == 0) ? 0 : 1;
@@ -1793,9 +1807,7 @@ void lobby_enter_battleroom(Lobby& lobby, Panel& panel) noexcept {
         lobby_max_units(game) = static_cast<uint16_t>(lobby_max_units_default(game));
     info.screen_width = static_cast<uint16_t>(static_cast<int32_t>(lobby_screen_width(game)));
     info.screen_height = static_cast<uint16_t>(static_cast<int32_t>(lobby_screen_height(game)));
-    info.status = static_cast<uint16_t>(
-        (info.status & ~status::has_disc) | (disc_present(lobby) ? status::has_disc : 0)
-    );
+    mark_local_block(info);
     if (auto* entry = panel_control(panel, "MESSAGE"))
         entry->value = 0x7f;
     int32_t energy = kDefaultResource;
@@ -2256,19 +2268,6 @@ LobbyAction handle_panel_event(Lobby& lobby, Panel& panel) noexcept {
             return action;
         }
         play(lobby, "BigButton");
-        int32_t discs = 0;
-        for (int32_t slot = 0; slot < kSlotCount; ++slot) {
-            auto& player = slot_player(lobby, slot);
-            if ((occupied_by(player, kSlotLocal) || slot_remote_playing(lobby, player)) &&
-                (info_of(lobby, player).status & status::has_disc) != 0)
-                ++discs;
-        }
-        const auto players = playing_count(lobby);
-        if (discs < 1 || (discs < 2 && players > 3) || (discs < 3 && players > 6)) {
-            panel.selected = kNoControl;
-            message(lobby, "There are not enough game CDs present to play");
-            return action;
-        }
         if (lobby_all_on_one_team(lobby)) {
             panel.selected = kNoControl;
             message(lobby, "Can not start game with all players on the same team.");
@@ -2485,10 +2484,7 @@ LobbyAction lobby_tick(Lobby& lobby, Panel& panel, LobbyFront front, Panel* view
     unit_sync_tick(lobby);
     if (lobby_clock_passed(now(lobby), lobby.next_stats_tick)) {
         lobby.next_stats_tick = now(lobby) + kStatsInterval;
-        auto& info = local_info(lobby);
-        info.status = static_cast<uint16_t>(
-            (info.status & ~status::has_disc) | (disc_present(lobby) ? status::has_disc : 0)
-        );
+        mark_local_block(local_info(lobby));
         send_periodic_status(lobby);
     }
     flush(lobby);
@@ -2560,6 +2556,9 @@ void lobby_send_player_info(Lobby& lobby) noexcept {
             [netgame::player_info_recorder_protocol_offset - netgame::player_info_tail_offset] =
             lobby.wire_rules.recorder_protocol;
         netgame::announce_unicode_chat(record, lobby.unicode_chat);
+        // Every block OA sends says so, a computer player's too, so another OA
+        // machine can tell it from 3.1c's.
+        netgame::stamp_engine_signature(record);
         uint8_t wire[kLobbyRecordBytes];
         std::size_t written = 0;
         if (netgame::encode_record(record, wire, sizeof(wire), &written) == netgame::WireError::ok)

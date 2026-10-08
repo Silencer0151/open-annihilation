@@ -431,6 +431,9 @@ struct Options {
     // loads the save and checks the loaded game runs, and that Pause and the
     // in-game menu still hold it and let it go.
     bool check_paused_save = false;
+    // Reads the simulation hash with no mod and under a mod, then after a
+    // Developer Mode override that changes the simulation, without a new start.
+    bool check_simulation_hash = false;
     // Starts a skirmish and checks, through the SDL presenter, that the
     // build menu, the bottom bar and the unit panel show units' names and
     // descriptions in the language this BCP-47 tag names, as the unit files
@@ -467,6 +470,9 @@ struct Options {
     bool check_touch_controls = false;
     /// --check-pad-controls: the gamepad controls, driven by SDL virtual pads, on a skirmish.
     bool check_pad_controls = false;
+    /// --check-running-while-inactive: the frame hook keeps being called while the
+    /// window is inactive with the request held, and the loop waits once it is released.
+    bool check_running_while_inactive = false;
     /// --touch-controls: touch controls on with no touch screen, to check their layout.
     bool touch_controls = false;
     /// --check-game-files: the Game files screen driven through a route by scripted hooks.

@@ -241,6 +241,7 @@ template <class Visitor, class Profile> void visit_bindings(Visitor& visitor, Pr
     visitor.value("layout.archive-patterns.hpi", profile.layout.archive_patterns.hpi);
     visitor.value("layout.file-extensions.unit-definition", profile.layout.file_extensions.unit_definition);
     visitor.value("layout.revision-archive", profile.layout.revision_archive);
+    visitor.value("layout.installation-archives", profile.layout.installation_archives);
     visitor.value("layout.cd-check", profile.layout.cd_check);
     visitor.value("layout.map-units-section", profile.layout.map_units_section);
     visitor.value("strings.status.nanolathing", profile.strings.status.nanolathing);

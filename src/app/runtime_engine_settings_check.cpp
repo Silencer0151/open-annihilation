@@ -6,6 +6,7 @@
 // effect.
 
 #include "engine_settings_menu_host.hpp"
+#include "engine_settings_state.hpp"
 
 #include "oa/app/runtime.hpp"
 #include "oa/platform/preferences.hpp"
@@ -113,6 +114,7 @@ void Runtime::check_engine_settings() {
     oa::platform::preferences::save(preference_path_, preference_values_);
     init::load_preferences(state_, skirmish_settings_, preferences_, *this);
     load_engine_settings();
+    check_unit_limit_preference();
     if (main_menu_overlay_)
         check_engine_settings_under_overlay();
     // An extension's overlay may draw over any part of the main menu and take
@@ -131,8 +133,176 @@ void Runtime::check_engine_settings() {
     check_engine_settings_dialog();
     check_engine_settings_window_sizes();
     check_engine_settings_in_match();
+    check_unsaved_unit_limit_ends_with_its_match();
     check_engine_settings_wiring();
     std::cout << "engine settings check: passed\n";
+}
+
+void Runtime::check_unit_limit_preference() {
+    const auto saved_limits = limits_.units_per_player;
+    const auto saved_setting = frontend_game().max_units_setting;
+    const auto saved_current = engine_settings_state().current.unit_limit;
+    const auto saved_values = preference_values_;
+
+    const auto read_back = [this] {
+        const auto values = oa::platform::preferences::load(preference_path_);
+        return settings::read_settings(values, EngineSettingsState::inputs(*this), false)
+            .unit_limit;
+    };
+    const auto stored_text = [this] {
+        const auto values = oa::platform::preferences::load(preference_path_);
+        const auto found = values.find(std::string(settings::key::unit_limit));
+        require(found != values.end(), "the unit limit preference was not stored");
+        return found->second;
+    };
+
+    set_unit_limit(*this, 400, SettingScope::immediate);
+    require(read_back() == 400, "a unit limit of 400 was not read back");
+    require(stored_text() == "400", "the unit limit preference does not hold 400");
+    require(frontend_game().max_units_setting == 400, "the next game did not take the unit limit");
+    require(engine_settings().unit_limit == 400, "the unit limit setting did not take 400");
+
+    // A game mode's limit reaches the next game and leaves the player's
+    // setting and the preferences file alone.
+    set_unit_limit(*this, 250, SettingScope::next_game);
+    require(
+        frontend_game().max_units_setting == 250, "a game mode's unit limit missed the next game"
+    );
+    require(
+        read_back() == 400 && stored_text() == "400",
+        "a game mode's unit limit was written to the preferences"
+    );
+    require(engine_settings().unit_limit == 400, "a game mode's unit limit changed the setting");
+    set_unit_limit(*this, 5, SettingScope::next_game);
+    require(
+        frontend_game().max_units_setting == settings::lowest_stored_unit_limit &&
+            stored_text() == "400",
+        "a game mode's low unit limit was not clamped, or was written"
+    );
+
+    // A limit for the next start is written, and Settings shows it; the
+    // games of this session keep the run's limit.
+    set_unit_limit(*this, 400, SettingScope::immediate);
+    set_unit_limit(*this, 600, SettingScope::next_restart);
+    require(
+        read_back() == 600 && stored_text() == "600", "a next-start unit limit was not written"
+    );
+    require(engine_settings().unit_limit == 600, "Settings does not show the next start's limit");
+    require(
+        frontend_game().max_units_setting == 400,
+        "a next-start unit limit changed the running session's games"
+    );
+
+    set_unit_limit(*this, 477, SettingScope::immediate);
+    require(
+        read_back() == 477 && stored_text() == "477", "a unit limit between the stops was not kept"
+    );
+
+    set_unit_limit(*this, 20, SettingScope::immediate);
+    require(
+        read_back() == settings::lowest_stored_unit_limit, "the lowest unit limit was not kept"
+    );
+    set_unit_limit(*this, 19, SettingScope::immediate);
+    require(
+        read_back() == settings::lowest_stored_unit_limit && stored_text() == "20",
+        "a low unit limit was not clamped"
+    );
+    set_unit_limit(*this, -40, SettingScope::immediate);
+    require(
+        read_back() == settings::lowest_stored_unit_limit, "a negative unit limit was not clamped"
+    );
+    set_unit_limit(*this, 1500, SettingScope::immediate);
+    require(read_back() == settings::highest_unit_limit, "the highest unit limit was not kept");
+    set_unit_limit(*this, 1501, SettingScope::immediate);
+    require(
+        read_back() == settings::highest_unit_limit && stored_text() == "1500",
+        "a high unit limit was not clamped"
+    );
+    set_unit_limit(*this, 100000, SettingScope::immediate);
+    require(
+        read_back() == settings::highest_unit_limit, "a unit limit past the highest was not clamped"
+    );
+
+    limits_.units_per_player.minimum = 100;
+    limits_.units_per_player.maximum = 3000;
+    set_unit_limit(*this, 50, SettingScope::immediate);
+    require(read_back() == 100, "a unit limit under a game's lowest was not clamped");
+    set_unit_limit(*this, 2000, SettingScope::immediate);
+    require(
+        read_back() == 2000 && stored_text() == "2000", "a unit limit a game allows was not kept"
+    );
+    set_unit_limit(*this, 9000, SettingScope::immediate);
+    require(read_back() == 3000, "a unit limit over a game's highest was not clamped");
+
+    limits_.units_per_player = saved_limits;
+    preference_values_ = saved_values;
+    preferences_dirty_ = true;
+    frontend_game().max_units_setting = saved_setting;
+    engine_settings_state().current.unit_limit = saved_current;
+    require(!EngineSettingsState::flush(*this), "the preferences were not put back");
+    const auto restored = oa::platform::preferences::load(preference_path_);
+    require(
+        restored.find(std::string(settings::key::unit_limit)) == restored.end(),
+        "the unit limit preference was left in the file"
+    );
+    std::cout << "engine settings check: an extension sets the unit limit preference\n";
+}
+
+void Runtime::check_unsaved_unit_limit_ends_with_its_match() {
+    const uint16_t setting = engine_settings_state().current.unit_limit;
+    const uint16_t run_before = frontend_game().max_units_setting;
+    const uint16_t game_mode_limit = setting == 250 ? 300 : 250;
+    const uint16_t next_limit = setting == 350 ? 400 : 350;
+    if (match_)
+        leave_match();
+    load(Screen::main_menu);
+    set_unit_limit(*this, game_mode_limit, SettingScope::next_game);
+    require(
+        frontend_game().max_units_setting == game_mode_limit,
+        "a game mode's unit limit missed the next game"
+    );
+    start_benchmark_skirmish();
+    require(
+        match_->state().game.max_units_setting == game_mode_limit,
+        "the match did not play at the game mode's unit limit"
+    );
+    // A game mode that sets another next-game limit during the match keeps it
+    // for the next new game. A restart, which keeps its match's limit, is not
+    // that game.
+    set_unit_limit(*this, next_limit, SettingScope::next_game);
+    const uint16_t restart_limit = EngineSettingsState::restart_unit_limit(*this);
+    leave_match();
+    require(
+        frontend_game().max_units_setting == next_limit,
+        "the unit limit set during a match for the next one was dropped"
+    );
+    EngineSettingsState::start_skirmish(*this, restart_limit, false);
+    require(
+        match_ && match_->state().game.max_units_setting == game_mode_limit,
+        "a restart did not keep its match's unit limit"
+    );
+    leave_match();
+    require(
+        frontend_game().max_units_setting == next_limit,
+        "a restart took the limit set for the next new game"
+    );
+    load(Screen::main_menu);
+    start_benchmark_skirmish();
+    require(
+        match_->state().game.max_units_setting == next_limit,
+        "the next new game did not play at the limit set for it"
+    );
+    leave_match();
+    require(
+        frontend_game().max_units_setting == setting,
+        "a game mode's next-game unit limit outlived its match"
+    );
+    require(
+        engine_settings().unit_limit == setting, "the game mode's unit limit changed the setting"
+    );
+    load(Screen::main_menu);
+    frontend_game().max_units_setting = run_before;
+    std::cout << "engine settings check: a game mode's unit limit ends with its match\n";
 }
 
 void Runtime::check_engine_settings_under_overlay() {

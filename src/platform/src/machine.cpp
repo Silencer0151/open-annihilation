@@ -302,4 +302,14 @@ bool running_in_steam_game_mode() {
     );
 }
 
+bool web_address_available(bool steam_deck, bool game_mode) noexcept {
+    return !(steam_deck && game_mode);
+}
+
+bool web_address_available() noexcept {
+    return web_address_available(
+        running_steam_deck_model() != SteamDeckModel::none, running_in_steam_game_mode()
+    );
+}
+
 } // namespace oa::platform

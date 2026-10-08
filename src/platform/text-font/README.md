@@ -55,19 +55,28 @@ beside the executable elsewhere. Their licences are in the repository's
   A line wider than `max_line_width` is cut off there.
 - `FontStack::layout` gives each character's font and pen without drawing,
   and `FontStack::face_for` the font a character comes from.
+  `fallback_chain` gives the faces a weight looks in, in that order.
+- `FontStack::face_metrics` gives one face's pixel size and rows at the size
+  a style draws it at. `FontStack::metrics` is the greatest of those rows
+  over the weight's chain.
 - `related_pixel_size` gives the size Noto Sans CJK and Noto Emoji are drawn
   at beside the DejaVu faces: 12 px beside 14 px, so ideographs stand a row
   or two taller than DejaVu's capitals, as the game's outlined capitals do.
   `Style::least_cjk_pixel_size` holds Noto Sans CJK to a least size, and
   the line's rows grow to hold it: the application draws ideographs at
-  12 px at the least while a Chinese, Japanese or Korean language is shown,
-  since smaller ones fill in.
+  `least_cjk_language_pixel_size` (12 px) at the least while a Chinese,
+  Japanese or Korean language is shown, since smaller ones fill in.
+  `message_log_pixel_size` (14), `status_readout_pixel_size` (11) and
+  `label_pixel_size` (11) are the sans faces beside the message log, the
+  status readouts, and the labels and the chat line.
 - `decode_utf8` decodes text, refusing what is not UTF-8.
 
 The sizes that match the game's fonts: DejaVu Sans Bold at 14 px, mono,
 beside the message log's `hattfont12` (capitals 10 rows, x-height 8,
 2-pixel stems), and DejaVu Sans at 11 px beside `CONSOLE.FNT`, the chat
-line's and the labels' font (x-height 6, 1-pixel strokes). The application
+line's and the labels' font (x-height 6, 1-pixel strokes). At 14 px the
+bold sans face has 13 rows above the baseline and 4 below; the line is 14
+and 4, which is the CJK face at 12 px. The application
 draws them at the player's Text size, from half to three times those
 sizes and never under 7 px, mono at every size.
 
@@ -92,10 +101,12 @@ and what it refuses (`decodes_only_utf8`), the limits on size, length and
 spacing (`refuses_what_it_cannot_draw`), the fallback chain
 (`falls_back_through_the_chain`), the sizes that match the game's fonts:
 DejaVu Sans Bold at 14 px gives an H of 10 rows and an x of 8, DejaVu Sans at
-11 px an x of 6, and ideographs at 12 px stand 11 or 12 rows
-(`matches_the_game_fonts_sizes`), mono, anti-aliased and spaced lines and
-the glyph store (`draws_mono_and_antialiased`), a store that stays within
-its bound and forgets the glyph used longest ago (`keeps_the_glyphs_used_last`),
+11 px an x of 6, and ideographs at 12 px stand 11 or 12 rows, and each face's
+rows at that size are what `face_metrics` reports, the line taking the
+greatest of its chain (`matches_the_game_fonts_sizes`), mono, anti-aliased
+and spaced lines and the glyph store (`draws_mono_and_antialiased`), a store
+that stays within its bound and forgets the glyph used longest ago
+(`keeps_the_glyphs_used_last`),
 and ideographs held to a least size while Latin letters keep theirs
 (`holds_ideographs_to_a_least_size`). `platform-text-font-pixels`
 runs the same program with `--pixels`: "Ab", a Chinese character and an emoji

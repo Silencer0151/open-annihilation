@@ -59,7 +59,8 @@ typedef struct PlayerSetupInfo {
     uint8_t version_major;
     uint8_t version_minor;
     uint32_t map_hash;
-    uint8_t reserved_after_map_hash[0x7]; /* copied with the block; the engine never reads it */
+    uint8_t engine_signature[2]; /* 'O', 'A' when Open Annihilation sent it; 3.1c never reads it */
+    uint8_t reserved_after_signature[0x5]; /* copied with the block; the engine never reads it */
     uint8_t recorder_protocol; /* the sender's recorder version, 0 for none; 3.1c never reads it */
     uint8_t chat_signature[2]; /* 'U', '8' when chat_flags holds the sender's chat */
     uint8_t chat_flags;        /* OA_SETUP_CHAT_*, read only after chat_signature */
@@ -90,7 +91,8 @@ OA_ASSERT_OFFSET(PlayerSetupInfo, max_units, 0xa5);
 OA_ASSERT_OFFSET(PlayerSetupInfo, version_major, 0xa7);
 OA_ASSERT_OFFSET(PlayerSetupInfo, version_minor, 0xa8);
 OA_ASSERT_OFFSET(PlayerSetupInfo, map_hash, 0xa9);
-OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_map_hash, 0xad);
+OA_ASSERT_OFFSET(PlayerSetupInfo, engine_signature, 0xad);
+OA_ASSERT_OFFSET(PlayerSetupInfo, reserved_after_signature, 0xaf);
 OA_ASSERT_OFFSET(PlayerSetupInfo, recorder_protocol, 0xb4);
 OA_ASSERT_OFFSET(PlayerSetupInfo, chat_signature, 0xb5);
 OA_ASSERT_OFFSET(PlayerSetupInfo, chat_flags, 0xb7);

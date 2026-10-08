@@ -157,7 +157,7 @@ optional.
 | `author` | Who made the mod: `name`, and optionally `email` | `author: {name: A. Modder}` |
 | `packaging` | Who packaged the profile and the mod's files, when, and how often since: `revision`, `date` and `packager` | `packaging: {revision: 1, date: 2026-10-04, packager: P. Packer}` |
 | `identity` | Display version, network version bytes, settings file, registry root, side names | `network-version: [20, 1]` |
-| `layout` | Revision archive, archive patterns, directory names, unit file extension, map units section, disc check | `directories: {units: unitsX}` |
+| `layout` | Revision archive, installation archives, archive patterns, directory names, unit file extension, map units section, disc check | `directories: {units: unitsX}` |
 | `limits` | Engine limits | `effects: {queue: 8192}` |
 | `script-extensions` | Fidelity, and well-known extensions mounted at `get` and `set` indices | `get: {71: unit.my-id}` |
 | `data-keys` | Keys in unit and weapon files, bound to registry meanings | `weapon: {nottoair: weapons.not-to-air}` |
@@ -303,12 +303,23 @@ on:
 - a constraint between parameters broken, such as a unit limit default
   above its maximum;
 - a data key bound to a meaning whose hack is off;
-- a hack this engine does not implement yet.
+- a hack this engine does not implement yet;
+- two `installation-archives` names that differ only in the case of their
+  letters;
+- a named installation archive that is missing from the installation, or
+  that is there but cannot be opened.
 
 Every diagnostic is one line, `file:line:column: path: message`:
 
 ```text
 oamod.yaml:21:5: hacks.repair.rate: unknown parameter 'speed' (have [mode])
+```
+
+When the fault is found while mounting and is not a place in the file, the
+line and column are left out, `file: path: message`:
+
+```text
+oamod.yaml: layout.installation-archives: installation archive 'addon.ccx' is missing
 ```
 
 A profile with any error is never played, and the engine never falls back
@@ -350,9 +361,10 @@ the same files would give:
 
 - A file in the mod folder replaces the game folder's file of the same path,
   compared without case, as copying would overwrite it.
-- Archive discovery (the revision archive, then the `ccx`, `ufo` and `hpi`
-  groups with the ten-archive limit on the `hpi` group, in the usual order)
-  runs over the two folders merged, file by file.
+- Archive discovery (the revision archive, then the `ccx` and `ufo` groups,
+  then the installation archives the profile names, then the `hpi` group
+  with its ten-archive limit, in the order of [6.2](#62-layout)) runs over
+  the two folders merged, file by file.
 - An empty file wins its path like any other, and so hides the file beneath
   it.
 - The game folder under a mod folder must be plain 3.1c: a game folder that
@@ -685,6 +697,7 @@ Layout keys nest one level where the key has two parts:
 | Key | Meaning | 3.1c | Type |
 | --- | --- | --- | --- |
 | `revision-archive` | The archive mounted in the revision slot. The base revision archive is then not mounted. | `rev31.gp3` | string, at most 64 |
+| `installation-archives` | Archives from the game installation, mounted in this order after the mod's own `ccx` and `ufo` archives and before the `hpi` group. A name here is not also mounted with its group, so a mod archive of an earlier group wins a shared path even when the installation archive's name would sort first. A name that is also the revision archive mounts in this slot, not the revision slot. The key was added after grammar 1's first release and is omitted from the canonical form at its empty baseline, so a profile that leaves it out, or writes `[]`, keeps the sim hash and the full hash it had before the key existed. A list that names an archive is included, in the order written. | none | 0 to 16 file names |
 | `archive-patterns.ccx`, `.ufo`, `.hpi` | The pattern of each later mount group. A replaced pattern also stops that group's base archives mounting, since they no longer match. | `*.CCX`, `*.UFO`, `*.HPI` | `*.` and 1 to 4 letters or digits |
 | `directories.units` | Unit definitions | `units` | string, at most 32 |
 | `directories.weapons` | Weapon definitions | `Weapons` | string, at most 32 |
@@ -698,11 +711,33 @@ Layout keys nest one level where the key has two parts:
 | `cd-check` | Whether the disc check runs. With `false` the disc archives always mount from the installed folders. | `true` | boolean |
 
 Every layout value is `sim` scope: every machine of a network game must read
-the same data. The mount order itself is the same for every mod: loose
-files, the revision archive, the `ccx` group, the `ufo` group, at most ten
-archives of the `hpi` group, then the disc's archives. A mod can hide base
-content in three ways: by renaming a directory, by changing the unit file
-extension, or by taking over a mount group's pattern.
+the same data. The mount order is loose files, the revision archive, the
+`ccx` group, the `ufo` group, the installation archives in the order written,
+at most ten archives of the `hpi` group, then the disc's archives. With no
+installation archives that slot mounts nothing, which is how an install that
+does not name any is mounted. A mod's own archive of the `hpi` group still
+mounts with that group, after the named installation archives.
+
+Each installation-archive name is a file name of 1 to 64 characters: no
+slash, backslash or colon, and not `.` or `..`. Names are matched without
+case. The same name twice is refused, and so are two names that differ only
+in the case of their letters. The name is sought in the merged top-level
+listing of the mod folder and the game folder, the same listing a copied
+install of those files would give. One that no folder holds is reported
+while mounting, with no line and column, as
+`file: layout.installation-archives: installation archive 'NAME' is missing`.
+One that is there but cannot be opened is reported the same way, with the
+reason it could not be opened. Either is an error, so the folder is unusable
+and the game does not fall back to 3.1c. An empty list, or a profile that
+leaves the key out, names nothing. The effective profile still holds `[]`,
+and `--print-profile` still prints it. The canonical form leaves the key
+out, so both hashes stay as they were before the key existed. A list that
+names an archive is part of the canonical form, in the order written.
+
+A mod can hide base content by renaming a directory, by changing the unit
+file extension, by taking over a mount group's pattern, or by shipping its
+own archive in an earlier group than the installation archive that holds the
+file it replaces.
 
 ### 6.3 `limits`
 
@@ -973,6 +1008,15 @@ change it, so two profiles that mean the same thing hash the same.
   strings, media, the visual
   hacks and every view value.
 
+`layout.installation-archives` is the exception. It was added after grammar
+1's first release. An absent key and an empty list both mount no extra
+archive, so neither enters the canonical form, and every profile that does
+not name an installation archive keeps the sim hash and the full hash it
+already had. A list of one or more names is included, in the order written,
+and it stays sim scope because the mounted data changes the game.
+`--print-profile` still prints the empty list: it prints the effective
+profile, and the omission is only in the canonical form the hashes read.
+
 The sim hash names the ruleset. Two profiles with the same sim hash play the
 same game, even when their names, comments or display choices differ. It is
 the hash saves are checked against ([4.4](#44-saves-and-settings)), and the
@@ -1063,8 +1107,11 @@ limits) and [src/app](../../src/app/README.md#mod-profile-and-mod-folders)
    INI file from the first folder that holds it, and the registry values
    kept in the preferences, filled by the profile's registry seeds. A
    profile with errors makes the folder unusable.
-3. **Layout.** The profile's revision archive and group patterns decide
-   which archives are mounted. Its directory names, unit file extension,
+3. **Layout.** The profile's revision archive, installation archives and
+   group patterns decide which archives are mounted. The installation
+   archives mount after the mod's own `ccx` and `ufo` archives and before
+   the base game's `hpi` archives; a missing one makes the folder unusable.
+   Its directory names, unit file extension,
    map units section, build version and side names go into the one data
    layout every loader reads, so a renamed directory replaces the base one
    at every site. With a mod folder, the files are layered as in

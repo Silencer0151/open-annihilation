@@ -104,8 +104,14 @@
 // beside the rules of each layer.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 /// The version of the extension table's contract an extension is built
 /// against. An extension checks oa::app::extension_api_version, its typed
@@ -115,8 +121,9 @@
 /// Raise it by one in the change that alters the contract: a hook added,
 /// removed or renamed; a hook's parameters, return value or the meaning of
 /// leaving it null; when or in which order the engine calls it; what it may
-/// keep or must free; its error behaviour; or a type, enumerator or bit the
-/// table uses. A change to wording alone keeps it. Version 2 is the first
+/// keep or must free; its error behaviour; a type, enumerator or bit the
+/// table uses; or a function an extension calls to read a value the engine
+/// resolved. A change to wording alone keeps it. Version 2 is the first
 /// with the layered layout's names: this header is oa/app/extension.hpp and
 /// the types the table names are in their modules' namespaces. Version 3
 /// replaces offers_multiplayer with select_multiplayer, which MULTI calls
@@ -161,8 +168,39 @@
 /// the engine then keeps the main loop running every frame while the window
 /// is inactive, and Options::remote_controlled says so. Version 13 adds
 /// FrameStage::presented: the frame hook is called a third time each frame,
-/// after the frame is drawn and shown.
-#define OA_EXTENSION_API_VERSION 13
+/// after the frame is drawn and shown. Version 14 adds functions an
+/// extension calls. None is a hook: the engine does not call them, and no
+/// extension fills them. player_folder(const Runtime&) reads the player's
+/// own folder for the run. set_unit_limit(Runtime&, int32_t) sets the unit
+/// limit preference, the configured limit a multiplayer game uses.
+/// keep_running_while_inactive(Runtime&, bool) holds or releases a request
+/// that the main loop keep running every frame while the window is inactive:
+/// held, the frame hook keeps being called there; released, the loop waits
+/// for an event, as it does otherwise. web_address_available() and
+/// open_web_address(const char*) ask whether this machine can open a web
+/// address in the system's browser and open an http or https address there;
+/// on a Steam Deck in Game Mode the answer is no. modern_text_chain,
+/// modern_text_layout, modern_text_pixels, message_log_text_size,
+/// game_text_preferences_of, game_text_preferences and
+/// set_focused_text_field read the modern text faces and their fallback
+/// chain at a pixel size, lay a line out and draw it, take the message log's
+/// face at the player's Text size, read the player's "Use modern fonts for
+/// game text" and "Text size" settings, and tell the engine where the
+/// focused text field is, for the input method's candidate window and the
+/// on-screen keyboard. read_game_file reads one whole file from the game's
+/// files: a loose file wins over a file of the same path in an archive, a
+/// mod's archive among them, and a missing file returns false without
+/// throwing. set_extension_window_source shows the extension's windows and
+/// controls to a program on this machine that drives the game, and the
+/// engine calls that source when the program asks for the screen's controls.
+/// extension_clock is the clock the extension's idle work follows: in a run
+/// that program controls it advances by the fixed clock's step once a frame
+/// and does not read the wall clock, and while the fixed clock is on it is
+/// that clock. simulation_hash reads the simulation hash the run plays
+/// under: the profile in play, with every Developer Mode override that
+/// changes the simulation, or the plain baseline when the game plays 3.1c. A
+/// running match keeps the hash it started with.
+#define OA_EXTENSION_API_VERSION 14
 
 namespace oa {
 struct Game;
@@ -1011,5 +1049,443 @@ struct Extension {
     /// @param runtime the runtime being destroyed
     void (*release_runtime)(void* context, Runtime& runtime){};
 };
+
+/// Returns the player's own folder of a runtime: where that run keeps the
+/// player's saved games, screenshots, films, recordings and mods.
+///
+/// It is the folder the runtime chose from its options and preferences:
+/// --user-folder, else the preferences' open-annihilation.user-folder while
+/// it holds an absolute path, else user_folder_name beside a named
+/// --preferences-file, else that folder in the Documents folder, else
+/// beside the preferences file the run reads when there is no Documents
+/// folder. Empty before the choice. The choice is made after the
+/// preferences load, which is after the startup, register_screens and ready
+/// hooks, so a call from those hooks reads an empty folder; a hook called
+/// once the runtime exists reads the folder.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param runtime the running app
+/// @return the folder, absolute; empty before it is chosen. It lives as
+///         long as the runtime
+[[nodiscard]] const std::filesystem::path& player_folder(const Runtime& runtime) noexcept;
+
+/// When a setting an extension changes takes effect, and whether the player
+/// keeps it. A call that changes one of the player's settings takes it.
+enum class SettingScope : uint8_t {
+    /// Now, and kept as the player's own setting.
+    immediate,
+    /// For the next new game and nothing after it: a skirmish this machine
+    /// starts, or a multiplayer game it hosts or joins. A joined game plays
+    /// at its host's value and still ends this one. A game that brings its
+    /// own value (a saved game, a campaign mission, a recording, a restart)
+    /// neither uses nor ends it. The player's setting is left as it is.
+    next_game,
+    /// Kept as the player's own setting, which Settings shows at once; the
+    /// games of the running session keep the value they have until the game
+    /// next starts.
+    next_restart,
+};
+
+/// Sets the unit limit a game plays at, as `scope` says.
+///
+/// The limit is the configured unit limit a game uses (Game.max_units_setting,
+/// and the preferences' open-annihilation.unit-limit). With
+/// SettingScope::immediate the next game offers it and the player's setting
+/// becomes it, written to the preferences at once. With SettingScope::next_game
+/// only the next new game plays at it: a game mode passes it as it starts its
+/// game, a joined multiplayer game plays at its host's limit instead, and when
+/// that match ends the player's own setting is the limit again. With
+/// SettingScope::next_restart the player's setting becomes it, as Settings
+/// shows, and the preferences are written; the games of this session keep
+/// the limit they have until the game next starts. The value
+/// is clamped into the range the unit limit setting keeps, as a stored
+/// preference is: the lowest the game allows (20 for 3.1c) through the
+/// highest the setting offers (1500, or a game's higher maximum). A value
+/// between the setting's stops is kept. The preferences load after the
+/// startup, register_screens and ready hooks, and that load replaces a limit
+/// set from those hooks; a hook called once the runtime's preferences are
+/// loaded sets the limit the game keeps.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param runtime the running app
+/// @param units_per_player the limit, in units per player
+/// @param scope when the limit takes effect, and whether the player keeps it
+void set_unit_limit(Runtime& runtime, int32_t units_per_player, SettingScope scope);
+
+/// Holds or releases the request that the main loop keep running while the
+/// window is inactive.
+///
+/// While the request is held, the loop runs every frame there, as it does
+/// for a live multiplayer game, and the frame hook keeps being called.
+/// Released, the loop waits for an event, as it does otherwise. Holding it
+/// again while it is held leaves it held; releasing it while it is released
+/// leaves it released. The request starts released. A call may come from
+/// any hook, and from one call to the next.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param runtime the running app
+/// @param hold true to hold the request, false to release it
+void keep_running_while_inactive(Runtime& runtime, bool hold);
+
+/// Tells whether this machine can open a web address in the system's browser.
+///
+/// The answer is no on a Steam Deck in Game Mode, which has no browser to
+/// hand an address to. A Steam Deck in its desktop session answers yes, and
+/// so does every other machine, including one running Steam's Big Picture.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @return whether open_web_address can hand an address to the system's
+///         browser
+[[nodiscard]] bool web_address_available() noexcept;
+
+/// Opens an http or https address in the system's browser.
+///
+/// Accepts an address whose scheme is http or https, in either letter case,
+/// with a body after "://", and refuses a null or empty address, any other
+/// scheme, a missing scheme and a body that holds an ASCII control or a
+/// space. A refused address is not handed to the browser. The address that
+/// is handed over is the one given, unchanged. A machine that cannot open
+/// one (web_address_available is false) opens nothing. An accepted address
+/// is handed to the system's browser through SDL.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+/// A call may come from any hook.
+///
+/// @param address the address, read for this call only; null is refused
+/// @return true when the browser was asked to open the address and could
+[[nodiscard]] bool open_web_address(const char* address);
+
+/// One font of the modern text stack, in the order a character is looked for.
+enum class ModernTextFace : uint8_t {
+    sans_bold, ///< Latin, Greek, Cyrillic and symbols, bold
+    sans,      ///< the same scripts with more characters, regular
+    cjk,       ///< Chinese, Japanese and Korean
+    emoji,     ///< emoji, drawn in one colour like any character
+};
+
+/// How many fonts the modern text stack holds.
+inline constexpr int modern_text_face_count = 4;
+
+/// The pixel size a modern line is drawn at.
+///
+/// pixel_size is the sans faces' pixels per em. The CJK and emoji faces take
+/// their own sizes from it. least_cjk_pixel_size holds the CJK face to a
+/// least size, or 0 to leave it at the size derived from pixel_size.
+struct ModernTextSize {
+    /// pixels per em of the sans faces
+    int32_t pixel_size{14};
+    /// bold looks in the bold sans face first; regular looks in the regular
+    /// sans face first
+    bool bold{true};
+    /// the least pixels per em of the CJK face; 0 leaves the derived size
+    int32_t least_cjk_pixel_size{};
+};
+
+/// The rows of one modern face at the pixel size a line draws it at.
+struct ModernFaceMetrics {
+    ModernTextFace face{};
+    int32_t pixel_size{}; ///< pixels per em of this face
+    int32_t ascent{};     ///< rows above the baseline
+    int32_t descent{};    ///< rows below the baseline, the baseline's own row among them
+};
+
+/// The modern faces a line looks in, and the rows of that line.
+///
+/// count faces are filled, in fallback order. Entries at and after count are
+/// zero. A bold line looks in all four faces; a regular line looks in the
+/// regular sans face, then the CJK face, then emoji. ascent and descent are
+/// the rows of the line the game draws, which fit every face of the chain.
+struct ModernTextChain {
+    std::array<ModernFaceMetrics, modern_text_face_count> faces{};
+    int32_t count{};
+    int32_t ascent{};
+    int32_t descent{};
+};
+
+/// One character of a modern line: the face that draws it and where.
+struct ModernTextGlyph {
+    char32_t character{};
+    ModernTextFace face{};
+    int32_t pen{};     ///< the pen's column, counted from the line's start
+    int32_t advance{}; ///< pixels the pen moves past it
+};
+
+/// One modern line drawn as coverage, one byte a pixel.
+struct ModernTextPixels {
+    int32_t width{};    ///< columns
+    int32_t height{};   ///< rows
+    int32_t baseline{}; ///< the row of the baseline
+    int32_t origin{};   ///< the column the pen starts at
+    int32_t advance{};  ///< pixels the pen moved
+    /// width * height bytes, top row first: 0 is untouched, 255 fully covered
+    std::vector<uint8_t> coverage{};
+};
+
+/// The Text size a player who has not changed it reads at, in percent of the
+/// game fonts' sizes. The engine checks it against its own setting's default.
+inline constexpr int32_t default_game_text_size = 80;
+
+/// The player's modern-text settings.
+///
+/// modern_fonts is "Use modern fonts for game text". text_size is "Text
+/// size", in percent of the game fonts' sizes.
+struct GameTextPreferences {
+    bool modern_fonts{};
+    int32_t text_size{default_game_text_size};
+};
+
+/// A text field in canvas pixels, and the caret's distance from its left.
+///
+/// The caret's distance is in the same pixels as the field. 0 is the field's
+/// start, which is where the game's own fields keep the caret. An extension
+/// whose caret stands further along the line passes that distance, so the
+/// input method's candidates stand beside the caret.
+struct TextField {
+    int x{};
+    int y{};
+    int width{};
+    int height{};
+    int cursor{};
+};
+
+/// Gives the modern faces a line looks in at a size, and the line's rows.
+///
+/// The fonts are the ones that travel with the game, opened the first time
+/// they are asked for. Any thread may call this and the other modern_text
+/// calls: they take turns with the faces. A size the faces cannot draw gives
+/// nothing, and so does a machine whose fonts cannot be opened.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param size the sans faces' pixel size, the weight and the least CJK size
+/// @return the chain; empty when the size is out of range or the fonts
+///         cannot be opened
+[[nodiscard]] std::optional<ModernTextChain> modern_text_chain(const ModernTextSize& size);
+
+/// Lays a line of modern text out without drawing it.
+///
+/// Characters that draw nothing are left out. The faces are modern_text_chain's,
+/// and any thread may call this.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param text UTF-8 text, read for this call only
+/// @param size the size modern_text_chain takes
+/// @return each drawn character with its face and pen; empty when the text
+///         is not UTF-8 or is too long, the size is out of range, or the
+///         fonts cannot be opened
+[[nodiscard]] std::optional<std::vector<ModernTextGlyph>>
+modern_text_layout(std::string_view text, const ModernTextSize& size);
+
+/// Draws a line of modern text as coverage.
+///
+/// The line is hinted to whole pixels, one bit a pixel, with no extra space
+/// between characters, as the message log is drawn. The faces are
+/// modern_text_chain's, and any thread may call this.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param text UTF-8 text, read for this call only
+/// @param size the size modern_text_chain takes
+/// @return the coverage; empty when the text is not UTF-8 or is too long,
+///         the size is out of range, or the fonts cannot be opened
+[[nodiscard]] std::optional<ModernTextPixels>
+modern_text_pixels(std::string_view text, const ModernTextSize& size);
+
+/// Gives the message log's modern face at a text size and scale.
+///
+/// The face is bold. Its pixel size is the message log's size at that text
+/// size and scale, and no smaller than the least the modern fonts are drawn
+/// at. While a Chinese, Japanese or Korean language is shown, the CJK face
+/// is held to 12 px. The size is the sans faces'; the CJK and emoji faces
+/// take their own sizes from it.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param text_size the player's Text size, in percent
+/// @param scale screen pixels to a game pixel, 1 or more
+/// @param cjk_language a Chinese, Japanese or Korean language is shown
+/// @return the size modern_text_chain takes for the message log
+[[nodiscard]] ModernTextSize
+message_log_text_size(int32_t text_size, int32_t scale, bool cjk_language) noexcept;
+
+/// Holds modern-text settings to the values the game keeps.
+///
+/// text_size is held to the sizes Text size offers. This does not read a
+/// runtime, and a language that draws in the modern fonts is not applied:
+/// game_text_preferences does that.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param modern_fonts Use modern fonts for game text is on
+/// @param text_size Text size, in percent
+/// @return the settings, with the text size held
+[[nodiscard]] GameTextPreferences
+game_text_preferences_of(bool modern_fonts, int32_t text_size) noexcept;
+
+/// Returns the modern-text settings in effect for a runtime.
+///
+/// These are the settings the game is drawing with: Use modern fonts for
+/// game text, including when the language shown turns those fonts on
+/// whatever the setting, and Text size. Should reading them fail, the
+/// defaults come back: modern fonts off and default_game_text_size, and the
+/// reason is written to the log once a run.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param runtime the running app
+/// @return the settings in effect
+[[nodiscard]] GameTextPreferences game_text_preferences(const Runtime& runtime) noexcept;
+
+/// Tells the input method where the focused text field is.
+///
+/// The field is in canvas pixels. The engine converts it to the window's own
+/// coordinates and gives that rectangle to the system, with the caret's
+/// distance from the field's left, so the input method's candidate window
+/// and the on-screen keyboard can stand clear of the field and beside the
+/// caret. A null field, or one whose width or height is not positive, clears
+/// the rectangle. A runtime whose window is not open is left as it is. This
+/// does not start or stop text input.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+/// A call may come from any hook.
+///
+/// @param runtime the running app
+/// @param field the field, in canvas pixels, read for this call only; null
+///        clears the rectangle
+void set_focused_text_field(Runtime& runtime, const TextField* field);
+
+/// Reads one whole file from the game's files into `bytes`.
+///
+/// The files are the runtime's store: the loose files of the folders it
+/// layers, then the archives it mounted, as the game reads them. A loose
+/// file wins over a file of the same path in any archive, a mod's archive
+/// among them. Where several loose folders are layered, the first folder
+/// that holds the path wins, and a mod's folder is layered ahead of the
+/// game folder. Where only archives hold the path, the earliest mounted
+/// archive wins. Mount order after the loose files is the revision archive,
+/// the ccx group, the ufo group, the installation archives in the order a
+/// mod names them, at most ten hpi archives, then the disc's archives.
+///
+/// A missing file, a null or empty path, and a path the store refuses
+/// return false. `bytes` is then empty. The call does not throw.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+/// A call may come from any hook.
+///
+/// @param runtime the running app
+/// @param path the file, with '\\' or '/' between its parts, matched
+///        ignoring ASCII case; read for this call only; null is refused
+/// @param[out] bytes the file's bytes; empty when the file is missing
+/// @return true when the file was read
+[[nodiscard]] bool
+read_game_file(const Runtime& runtime, const char* path, std::vector<uint8_t>& bytes);
+
+/// What a control of an extension's window is, as the driver names it.
+enum class ExtensionControlKind : uint8_t {
+    button,     ///< a push button
+    check_box,  ///< a button that flips between checked and not
+    list,       ///< a list of rows, one of which may be selected
+    text_field, ///< a field that takes typed text
+    slider,     ///< a scroll bar
+    label,      ///< text that takes no pointer
+    area,       ///< a surface that takes the pointer
+    image,      ///< a picture that takes no pointer
+};
+
+/// One control of a window an extension shows.
+///
+/// Its place is on the game's canvas, in that canvas's pixels, as the
+/// screen's own controls are placed.
+struct ExtensionControl {
+    std::string name;               ///< as the extension spells it; empty is left out
+    ExtensionControlKind kind{};    ///< what it is
+    int32_t x{};                    ///< its left column on the canvas
+    int32_t y{};                    ///< its top row on the canvas
+    int32_t width{};                ///< its width in canvas pixels
+    int32_t height{};               ///< its height in canvas pixels
+    bool visible{true};             ///< it is shown
+    bool enabled{true};             ///< it takes a click
+    bool focused{};                 ///< it holds the keyboard focus
+    bool checked{};                 ///< a check box is checked
+    std::string text;               ///< its caption, its label's text or a field's typed text
+    std::vector<std::string> items; ///< a list's rows
+    int32_t first_visible{};        ///< a list's first row shown
+    int32_t rows{};                 ///< the rows a list shows at once
+    int32_t row_height{};           ///< a list's row pitch in canvas pixels
+    int32_t selected{-1};           ///< a list's selected row; -1 for none
+};
+
+/// One window an extension shows over the game, and the controls on it.
+struct ExtensionWindow {
+    std::string name;                       ///< as the extension spells it; empty is left out
+    std::vector<ExtensionControl> controls; ///< its controls, in the extension's order
+};
+
+/// Lists the windows an extension shows, for a program driving the game.
+///
+/// The vector is empty on entry. The source appends the windows this
+/// extension shows now. It must not change the runtime, and it must not
+/// throw.
+///
+/// @param context the pointer set_extension_window_source was given
+/// @param runtime the running app
+/// @param[out] windows receives the windows
+using ExtensionWindowSource =
+    void (*)(void* context, const Runtime& runtime, std::vector<ExtensionWindow>& windows);
+
+/// Shows an extension's windows to a program on this machine that drives the game.
+///
+/// The source replaces any source already registered with the same context.
+/// A null source removes it. The engine calls the sources, in the order they
+/// were first registered, when that program asks for the screen's controls,
+/// on the thread that runs main(), and copies what they append before it
+/// calls the next. At most 16 sources are kept. A call may come from any
+/// hook. The windows are listed ahead of the screen's own controls, since
+/// they take the pointer over the screen.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+///
+/// @param runtime the running app
+/// @param context identifies the source; the extension's own, passed back to it
+/// @param source the list of windows; null removes the source for `context`
+void set_extension_window_source(Runtime& runtime, void* context, ExtensionWindowSource source);
+
+/// Returns the clock an extension's idle work follows, in milliseconds.
+///
+/// While the fixed clock is on, this is that clock: the running match's tick
+/// times the fixed step, one thirtieth of a second. In a run a program on
+/// this machine controls, it advances by that same step once a frame, from
+/// the first frame, and does not read the wall clock. Otherwise it is the
+/// steady clock, as the game's own clock is then. The low 32 bits are kept,
+/// as that clock keeps them.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+/// A call may come from any hook, and from a window source.
+///
+/// @param runtime the running app
+/// @return the clock, in milliseconds
+[[nodiscard]] uint32_t extension_clock(const Runtime& runtime);
+
+/// Returns the simulation hash the run plays under, as 64 lower-case
+/// hexadecimal digits.
+///
+/// It is the profile in play: the mod's sim hash with every Developer Mode
+/// override that changes the simulation, or the plain 3.1c baseline when
+/// the game plays 3.1c. Saves and network games are matched on it. A
+/// running match keeps the profile it started with, so an override that
+/// changes the simulation shows here once that match ends; with no match
+/// running it shows at once. A display-only override leaves it unchanged.
+///
+/// It is not a hook: the engine does not call it, and no extension fills it.
+/// A call may come from any hook.
+///
+/// @param runtime the running app
+/// @return the hash
+[[nodiscard]] std::string simulation_hash(const Runtime& runtime);
 
 } // namespace oa::app

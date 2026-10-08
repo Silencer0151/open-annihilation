@@ -652,6 +652,14 @@ if(BUILD_TESTING)
   target_link_libraries(oa-game-directory-test PRIVATE oa-app-game-directory oa-app-headers oa-formats-hpi
     oa-platform-preferences oa-platform-shims oa-test-game-data oa-options)
   add_test(NAME game-directory COMMAND oa-game-directory-test)
+  # A profile names installation archives: a file resolves from the mod's
+  # archive, then the named archive, then the base archive, the same for a
+  # mod folder and a copied install. A missing named archive makes the
+  # folder unusable.
+  add_executable(oa-app-installation-archives-test src/app/installation_archives_test.cpp)
+  target_link_libraries(oa-app-installation-archives-test PRIVATE oa-app-game-directory
+    oa-formats-hpi oa-test-support oa-options)
+  add_test(NAME app-installation-archives COMMAND oa-app-installation-archives-test)
   # The installation OA_GAME_DIR names passes the folder dialog's check.
   oa_add_game_data_test(game-directory-install oa-game-directory-test --install)
   # The demo's installer recognised and its archive unpacked, over a
@@ -841,6 +849,28 @@ if(BUILD_TESTING)
     set_tests_properties(app-graphics-report PROPERTIES TIMEOUT 60
       ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy"
       ENVIRONMENT_MODIFICATION "SDL_RENDER_DRIVER=unset:")
+    # An extension opens an http or https address through a stub opener, and
+    # every other scheme is refused. Availability follows the machine.
+    add_executable(oa-app-web-address-test src/app/web_address_test.cpp src/app/web_address.cpp)
+    target_link_libraries(oa-app-web-address-test PRIVATE oa-app-headers oa-platform-shims
+      SDL3::SDL3 oa-test-support oa-options)
+    add_test(NAME app-web-address COMMAND oa-app-web-address-test)
+    # An extension reads one file from the game's files: a loose file wins
+    # over the same path in an archive, an archive-only file is read, and a
+    # missing path returns false.
+    add_executable(oa-app-game-file-test src/app/game_file_test.cpp)
+    target_link_libraries(oa-app-game-file-test PRIVATE oa-formats-hpi oa-test-support oa-options)
+    add_test(NAME app-read-game-file COMMAND oa-app-game-file-test)
+    # An extension reads the modern text faces at a size, the text settings
+    # written and read back, and the focused field's place through a stub.
+    add_executable(oa-app-extension-text-test src/app/extension_text_test.cpp
+      src/app/modern_text.cpp src/app/text_input_area.cpp)
+    # It also draws from several threads at once, so it links the threads.
+    target_link_libraries(oa-app-extension-text-test PRIVATE oa-app-headers oa-platform-text-font
+      oa-present oa-base-threads SDL3::SDL3 oa-test-support oa-options)
+    oa_copy_text_fonts(oa-app-extension-text-test "$<TARGET_FILE_DIR:oa-app-extension-text-test>")
+    add_test(NAME app-extension-text COMMAND oa-app-extension-text-test)
+    set_tests_properties(app-extension-text PROPERTIES TIMEOUT 120)
   endif()
 endif()
 set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size.cpp
@@ -875,7 +905,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_skirmish_host.cpp
   src/app/runtime_skirmish_start.cpp src/app/runtime_map_units.cpp src/app/runtime_world_draw.cpp src/app/world_draws.cpp src/app/runtime_benchmark.cpp src/app/runtime_music.cpp
   src/app/runtime_saveload.cpp src/app/runtime_sides.cpp src/app/asset_files.cpp
-  src/app/runtime_platform.cpp src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
+  src/app/runtime_platform.cpp src/app/runtime_inactive_loop_check.cpp
+  src/app/runtime_endgame.cpp src/app/runtime_radar.cpp
   src/app/runtime_factory_check.cpp src/app/runtime_unit_speech_check.cpp
   src/app/runtime_build_page_check.cpp
   src/app/runtime_language_check.cpp
@@ -888,6 +919,9 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/runtime_build_site_check.cpp src/app/runtime_multiplayer_check.cpp
   src/app/runtime_check_host.cpp src/app/check_host_input.cpp src/app/runtime_automation_host.cpp
   src/app/runtime_notices.cpp src/app/runtime_notice_check.cpp src/app/web_link.cpp
+  src/app/web_address.cpp
+  src/app/game_file.cpp
+  src/app/modern_text.cpp src/app/text_input_area.cpp
   src/app/runtime_user_folder.cpp src/app/runtime_user_folder_check.cpp
   src/app/runtime_mod_switch_check.cpp
   src/app/runtime_mod_warning.cpp src/app/runtime_mod_warning_check.cpp
@@ -917,7 +951,8 @@ set(oa_game_sources src/app/main.cpp src/app/full_screen.cpp src/app/screen_size
   src/app/game_files_check.cpp src/app/runtime_game_files.cpp
   src/app/runtime_pad.cpp src/app/runtime_pad_actions.cpp src/app/runtime_pad_pointer.cpp
   src/app/runtime_pad_haptics.cpp src/app/runtime_pad_check.cpp src/app/runtime_text_input.cpp
-  src/app/folder_chooser_screen.cpp src/app/runtime_found_install.cpp)
+  src/app/folder_chooser_screen.cpp src/app/runtime_found_install.cpp
+  src/app/simulation_hash.cpp)
 # The run manifest of a director render, the settings dialog's header and the
 # Game files screen's header name the engine's version, and the renderer
 # records are written under it.
@@ -1363,6 +1398,32 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_engine_settings_dir}/engine-settings.conf")
       set_tests_properties(native-engine-settings PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_engine_settings_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # The simulation hash an extension reads: the plain baseline with no
+      # mod, a mod profile's when that profile changes the simulation, a
+      # different hash after a Developer Mode override of a rule in the same
+      # start, and the first hash again once the settings are put back.
+      set(oa_simulation_hash_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/simulation-hash")
+      file(MAKE_DIRECTORY "${oa_simulation_hash_dir}")
+      file(WRITE "${oa_simulation_hash_dir}/changed.oamod.yaml"
+        "oamod: 1\n"
+        "id: changed-rules\n"
+        "name: Changed rules\n"
+        "version: \"1.0\"\n"
+        "requires: {base: ta-3.1c, catalogue: 1}\n"
+        "author: {name: unknown}\n"
+        "packaging: {revision: 1, date: 2026-10-09, packager: Open Annihilation}\n"
+        "hacks:\n"
+        "  units.id-reuse-delay: 90\n")
+      add_test(NAME native-simulation-hash COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-simulation-hash
+        --preferences-file "${oa_simulation_hash_dir}/simulation-hash.conf")
+      add_test(NAME native-simulation-hash-mod COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-simulation-hash
+        --mod "${oa_simulation_hash_dir}/changed.oamod.yaml"
+        --preferences-file "${oa_simulation_hash_dir}/simulation-hash-mod.conf")
+      set_tests_properties(native-simulation-hash native-simulation-hash-mod PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT} WORKING_DIRECTORY "${oa_simulation_hash_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # The player's own folder beside the check's preferences file: saved
       # games where earlier versions kept them, beside the preferences file
@@ -1887,6 +1948,16 @@ if(OA_BUILD_PLATFORM)
         --preferences-file "${oa_pointer_check_dir}/pointer-interfaces.conf")
       set_tests_properties(native-pointer-interfaces PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT}
         WORKING_DIRECTORY "${oa_pointer_check_dir}"
+        ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
+      # With the request held, the frame hook keeps being called while the
+      # window is inactive; released, the loop waits for an event.
+      set(oa_inactive_loop_dir "${CMAKE_CURRENT_BINARY_DIR}/native-checks/running-while-inactive")
+      file(MAKE_DIRECTORY "${oa_inactive_loop_dir}")
+      add_test(NAME native-running-while-inactive COMMAND oa-game --game-dir "${OA_GAME_DIR}"
+        --skip-intro --mute --check-running-while-inactive
+        --preferences-file "${oa_inactive_loop_dir}/running-while-inactive.conf")
+      set_tests_properties(native-running-while-inactive PROPERTIES TIMEOUT 300
+        WORKING_DIRECTORY "${oa_inactive_loop_dir}"
         ENVIRONMENT "SDL_VIDEO_DRIVER=dummy;SDL_AUDIO_DRIVER=dummy;SDL_RENDER_DRIVER=software")
       # What the megamap (ui.megamap) draws: the map's own colours, only its
       # indestructible features by their pictures, no rectangle for the main

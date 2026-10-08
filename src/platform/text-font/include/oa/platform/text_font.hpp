@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,6 +84,25 @@ struct LineMetrics {
     int32_t descent{}; ///< rows below the baseline, the baseline's own row among them
 };
 
+/// The rows of one face at the pixel size a style draws it at.
+struct FaceMetrics {
+    int32_t pixel_size{}; ///< pixels per em of this face
+    int32_t ascent{};     ///< rows above the baseline
+    int32_t descent{};    ///< rows below the baseline, the baseline's own row among them
+};
+
+/// Pixels per em of the bold sans face beside the message log's font, at
+/// the game fonts' size and a scale of 1.
+inline constexpr int32_t message_log_pixel_size = 14;
+/// Pixels per em of the bold sans face beside the status readouts' font.
+inline constexpr int32_t status_readout_pixel_size = 11;
+/// Pixels per em of the regular sans face beside the labels' and the chat
+/// line's font.
+inline constexpr int32_t label_pixel_size = 11;
+/// The least pixels per em of the CJK face while a Chinese, Japanese or
+/// Korean language is shown, so its strokes do not fill in.
+inline constexpr int32_t least_cjk_language_pixel_size = 12;
+
 /// One drawn line: how much of each pixel the text covers.
 struct Coverage {
     int32_t width{};  ///< columns
@@ -106,6 +126,16 @@ struct Placement {
     int32_t pen{};     ///< the pen's column, counted from the line's start
     int32_t advance{}; ///< pixels the pen moves past it, letter spacing included
 };
+
+/// Gives the faces a weight looks a character up in, in that order.
+///
+/// Bold looks in DejaVu Sans Bold first, then DejaVu Sans for what it
+/// lacks. Regular looks in DejaVu Sans first. Both then look in Noto Sans
+/// CJK and Noto Emoji. The span lives as long as the program.
+///
+/// @param weight the weight of the line
+/// @return the faces, the first that has a character drawing it
+[[nodiscard]] std::span<const Face> fallback_chain(Weight weight) noexcept;
 
 /// Gives the pixel size Noto Sans CJK and Noto Emoji are drawn at next to the
 /// DejaVu faces at a size.
@@ -182,6 +212,17 @@ class FontStack {
     /// @return the ascent and descent of the tallest font of the stack at
     ///         its size; empty for a size out of range
     [[nodiscard]] std::optional<LineMetrics> metrics(const Style& style);
+
+    /// Gives the rows of one face at the pixel size a style draws it at.
+    ///
+    /// The sans faces take the style's pixel size. Noto Sans CJK and Noto
+    /// Emoji take related_pixel_size of it, and Noto Sans CJK no less than
+    /// the style's least size. Noto Emoji is set to the style's weight.
+    ///
+    /// @param face the face
+    /// @param style the style; its pixel size must be 1..max_pixel_size
+    /// @return the face's size and rows; empty for a size out of range
+    [[nodiscard]] std::optional<FaceMetrics> face_metrics(Face face, const Style& style);
 
     /// Lays a line out without drawing it.
     ///

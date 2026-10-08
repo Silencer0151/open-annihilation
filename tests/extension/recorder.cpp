@@ -61,7 +61,9 @@ namespace {
 // The version of the extension table's contract the recorder follows, and
 // the hooks the table holds after its context at that version. A change to
 // the table raises OA_EXTENSION_API_VERSION (extension.hpp); both follow it.
-constexpr uint32_t kExtensionApiVersionRecorded = 13;
+// Version 14 adds only functions an extension calls rather than hooks, so the
+// hook count is unchanged.
+constexpr uint32_t kExtensionApiVersionRecorded = 14;
 constexpr std::size_t kHookCount = 40;
 static_assert(
     extension_api_version == kExtensionApiVersionRecorded,

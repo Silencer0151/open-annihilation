@@ -119,6 +119,7 @@ void refuses_what_it_cannot_draw() {
     OA_CHECK(!stack->draw("A", style_of(0, Weight::bold)));
     OA_CHECK(!stack->draw("A", style_of(text_font::max_pixel_size + 1, Weight::bold)));
     OA_CHECK(!stack->metrics(style_of(0, Weight::bold)));
+    OA_CHECK(!stack->face_metrics(Face::dejavu_sans_bold, style_of(0, Weight::bold)));
     auto spaced = bold;
     spaced.letter_spacing = text_font::max_letter_spacing + 1;
     OA_CHECK(!stack->draw("A", spaced));
@@ -145,6 +146,19 @@ void falls_back_through_the_chain() {
     auto stack = open_beside();
     if (!stack)
         return;
+    const auto bold = text_font::fallback_chain(Weight::bold);
+    const auto regular = text_font::fallback_chain(Weight::regular);
+    OA_CHECK(bold.size() == 4 && regular.size() == 3);
+    OA_CHECK(
+        bold[0] == Face::dejavu_sans_bold && bold[1] == Face::dejavu_sans &&
+        bold[2] == Face::noto_sans_cjk && bold[3] == Face::noto_emoji
+    );
+    OA_CHECK(
+        regular[0] == Face::dejavu_sans && regular[1] == Face::noto_sans_cjk &&
+        regular[2] == Face::noto_emoji
+    );
+    OA_CHECK(stack->face_for(U'A', Weight::bold) == bold.front());
+    OA_CHECK(stack->face_for(U'A', Weight::regular) == regular.front());
     OA_CHECK(stack->face_for(U'A', Weight::bold) == Face::dejavu_sans_bold);
     OA_CHECK(stack->face_for(U'A', Weight::regular) == Face::dejavu_sans);
     OA_CHECK(stack->face_for(0x0416, Weight::bold) == Face::dejavu_sans_bold); // Cyrillic Zhe
@@ -174,18 +188,40 @@ void falls_back_through_the_chain() {
     }
 }
 
+/// The line's rows are the greatest rows of the faces its weight looks in.
+void chain_rows_match(text_font::FontStack& stack, const Style& style) {
+    const auto line = stack.metrics(style);
+    OA_CHECK(line.has_value());
+    int32_t ascent = 0;
+    int32_t descent = 0;
+    for (const Face face : text_font::fallback_chain(style.weight)) {
+        const auto measured = stack.face_metrics(face, style);
+        OA_CHECK(measured.has_value());
+        if (!measured)
+            return;
+        ascent = std::max(ascent, measured->ascent);
+        descent = std::max(descent, measured->descent);
+    }
+    if (line)
+        OA_CHECK(line->ascent == ascent && line->descent == descent);
+}
+
 void matches_the_game_fonts_sizes() {
     auto stack = open_beside();
     if (!stack)
         return;
+    OA_CHECK(text_font::message_log_pixel_size == 14);
+    OA_CHECK(text_font::status_readout_pixel_size == 11);
+    OA_CHECK(text_font::label_pixel_size == 11);
+    OA_CHECK(text_font::least_cjk_language_pixel_size == 12);
     // Next to hattfont12, the message log's font: capitals 10 rows and an
     // x-height of 8, from DejaVu Sans Bold at 14 px.
-    const auto log = style_of(14, Weight::bold);
+    const auto log = style_of(text_font::message_log_pixel_size, Weight::bold);
     OA_CHECK(ink_height(*stack, "H", log) == 10);
     OA_CHECK(ink_height(*stack, "x", log) == 8);
     // Next to CONSOLE.FNT, the chat line's and the labels' font: an x-height
     // of 6, from DejaVu Sans at 11 px.
-    const auto label = style_of(11, Weight::regular);
+    const auto label = style_of(text_font::label_pixel_size, Weight::regular);
     OA_CHECK(ink_height(*stack, "x", label) == 6);
     OA_CHECK(ink_height(*stack, "H", label) == 8);
     // CJK at 12 px beside the 14-px log font: ideographs 11 or 12 rows.
@@ -196,10 +232,41 @@ void matches_the_game_fonts_sizes() {
     const int32_t ideograph = ink_height(*stack, "\xE4\xB8\xAD\xE5\x9C\x8B", log);
     OA_CHECK(ideograph >= 11 && ideograph <= 12);
     // The line fits every font: it is at least as tall as the log's 14 rows.
+    const auto bold_sans = stack->face_metrics(Face::dejavu_sans_bold, log);
+    const auto cjk = stack->face_metrics(Face::noto_sans_cjk, log);
+    const auto emoji = stack->face_metrics(Face::noto_emoji, log);
+    const auto regular_sans = stack->face_metrics(Face::dejavu_sans, label);
+    // Rows as FreeType 2.14.3 reports them: the bold sans at 14 px, the CJK
+    // and emoji faces at 12 px beside it, and the regular sans at 11 px.
+    OA_CHECK(bold_sans && bold_sans->pixel_size == 14);
+    OA_CHECK(bold_sans && bold_sans->ascent == 13 && bold_sans->descent == 4);
+    OA_CHECK(cjk && cjk->pixel_size == 12 && cjk->ascent == 14 && cjk->descent == 4);
+    OA_CHECK(emoji && emoji->pixel_size == 12 && emoji->ascent == 12 && emoji->descent == 3);
+    OA_CHECK(regular_sans && regular_sans->pixel_size == 11);
+    OA_CHECK(regular_sans && regular_sans->ascent == 11 && regular_sans->descent == 3);
+    // A regular line still measures the bold face when asked for it.
+    OA_CHECK(
+        stack->face_metrics(Face::dejavu_sans_bold, label) &&
+        stack->face_metrics(Face::dejavu_sans_bold, label)->pixel_size ==
+            text_font::label_pixel_size
+    );
+    chain_rows_match(*stack, log);
+    chain_rows_match(*stack, label);
+    auto cjk_floor = style_of(text_font::label_pixel_size, Weight::bold);
+    cjk_floor.least_cjk_pixel_size = text_font::least_cjk_language_pixel_size;
+    const auto held_cjk = stack->face_metrics(Face::noto_sans_cjk, cjk_floor);
+    const auto held_emoji = stack->face_metrics(Face::noto_emoji, cjk_floor);
+    OA_CHECK(held_cjk && held_cjk->pixel_size == 12);
+    OA_CHECK(
+        held_emoji &&
+        held_emoji->pixel_size == text_font::related_pixel_size(text_font::label_pixel_size)
+    );
+    chain_rows_match(*stack, cjk_floor);
     const auto line = stack->metrics(log);
     OA_CHECK(line.has_value());
+    // The line is the CJK face's rows: 14 above the baseline and 4 below.
     if (line)
-        OA_CHECK(line->ascent >= 12 && line->descent >= 2 && line->ascent + line->descent >= 14);
+        OA_CHECK(line->ascent == 14 && line->descent == 4);
     // A drawn line is at least the style's rows, its baseline at the ascent.
     const auto drawn = stack->draw("Hg", log);
     OA_CHECK(
@@ -289,6 +356,12 @@ void holds_ideographs_to_a_least_size() {
     floored.least_cjk_pixel_size = 12;
     // An ideograph at 8 px is drawn at 12 px; Latin letters keep their
     // size, in a line grown to hold the ideographs.
+    const auto cjk_face = stack->face_metrics(Face::noto_sans_cjk, floored);
+    const auto sans_face = stack->face_metrics(Face::dejavu_sans_bold, floored);
+    const auto emoji_face = stack->face_metrics(Face::noto_emoji, floored);
+    OA_CHECK(cjk_face && cjk_face->pixel_size == 12);
+    OA_CHECK(sans_face && sans_face->pixel_size == 8);
+    OA_CHECK(emoji_face && emoji_face->pixel_size == text_font::related_pixel_size(8));
     const auto plain = stack->draw("\xE4\xB8\xAD", small);
     const auto held = stack->draw("\xE4\xB8\xAD", floored);
     OA_CHECK(plain && held && plain->advance < 12 && held->advance >= 12);

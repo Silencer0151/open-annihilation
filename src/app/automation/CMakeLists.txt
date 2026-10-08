@@ -32,6 +32,22 @@ target_include_directories(oa-app-automation-input PUBLIC "${CMAKE_CURRENT_SOURC
 target_link_libraries(oa-app-automation-input PUBLIC oa-app-automation-protocol PRIVATE oa-options)
 
 if(TARGET oa-game)
+  # A window the automation check drives: one button and the idle clock on
+  # the main menu, listed by the endpoint when --fixture-window is given. It
+  # is a test extension, so only a build configured with
+  # -DOA_RECORD_EXTENSION_HOOKS=ON, which combines the test extensions of
+  # tests/extension, combines it; the game players get combines none.
+  if(OA_RECORD_EXTENSION_HOOKS)
+    add_library(oa-app-automation-window-fixture STATIC window_fixture.cpp)
+    add_library(oa::app::automation_window_fixture ALIAS oa-app-automation-window-fixture)
+    target_compile_features(oa-app-automation-window-fixture PRIVATE cxx_std_20)
+    # oa/app/app.hpp, which names the main menu, needs the headers of the
+    # libraries it uses.
+    target_link_libraries(oa-app-automation-window-fixture PRIVATE oa-app-headers
+      oa-app-command-line oa-ui-frontend-renderer oa-ui-frontend-state oa-sim-scenario
+      oa-ui-screen-registry oa-options)
+    oa_add_extension(oa-app-automation-window-fixture INIT oa_extension_init_window_fixture)
+  endif()
   # What the endpoint reports of a match and of the battle room, and the
   # events it learns by comparing what the game holds from frame to frame,
   # read from the canonical records and the multiplayer screens' lobby
@@ -142,5 +158,16 @@ if(BUILD_TESTING AND TARGET oa-game AND IS_DIRECTORY "${OA_GAME_DIR}")
       --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
       --scratch-root "${oa_automation_checks}")
     set_tests_properties(native-automation-digest PROPERTIES TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+    # An extension's window: the endpoint lists its controls, a click on its
+    # button reaches it, and its clock reads the fixed clock's step. Only a
+    # build that combines the window fixture runs it.
+    if(OA_RECORD_EXTENSION_HOOKS)
+      add_test(NAME native-automation-extension-windows COMMAND ${Python3_EXECUTABLE}
+        "${PROJECT_SOURCE_DIR}/tools/check_native_automation_windows.py"
+        --native $<TARGET_FILE:oa-game> --game-dir "${OA_GAME_DIR}"
+        --scratch-root "${oa_automation_checks}")
+      set_tests_properties(native-automation-extension-windows PROPERTIES
+        TIMEOUT ${OA_NATIVE_CHECK_TIMEOUT})
+    endif()
   endif()
 endif()

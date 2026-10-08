@@ -189,6 +189,7 @@ resolve_folder_profile(const std::vector<fs::path>& folders, const ModChoice& ch
             return result;
         file = *found;
     }
+    result.file = file;
     // The first pass names the settings file and registry root; the second
     // resolves with the settings they hold.
     const auto first = load_mod_profile(file, choice.accept_unimplemented_hacks);
@@ -406,6 +407,7 @@ DiscoveryPlan discovery_plan_of(const mod_profile::ModProfile* profile) {
     if (profile == nullptr)
         return plan;
     plan.revision_archive = profile->layout.revision_archive;
+    plan.installation_archives = profile->layout.installation_archives;
     plan.ccx_pattern = profile->layout.archive_patterns.ccx;
     plan.ufo_pattern = profile->layout.archive_patterns.ufo;
     plan.hpi_pattern = profile->layout.archive_patterns.hpi;

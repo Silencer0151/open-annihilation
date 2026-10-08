@@ -947,6 +947,34 @@ class Runtime final : public menu::Host,
     ///     state, or the Game block's live-game bit
     [[nodiscard]] bool keeps_running_inactive() const;
 
+    /// Holds or releases the request that the loop keep running while the
+    /// window is inactive (keep_running_while_inactive in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @param hold true to hold the request, false to release it
+    friend void keep_running_while_inactive(Runtime& runtime, bool hold);
+
+    /// Prepares --check-running-while-inactive and holds the window inactive
+    /// for the rest of that run. [runtime_inactive_loop_check.cpp]
+    void begin_inactive_loop_check();
+
+    /// Counts one call of the frame hook for --check-running-while-inactive,
+    /// and releases the request once the held calls are in.
+    /// [runtime_inactive_loop_check.cpp]
+    void note_inactive_loop_frame();
+
+    /// Takes the event that ends --check-running-while-inactive's wait.
+    ///
+    /// @param event event just received
+    /// @return true when the event is that check's wake, which ends the run
+    bool take_inactive_loop_wake(const SDL_Event& event);
+
+    /// Reports --check-running-while-inactive. Throws std::runtime_error when
+    /// the frame hook did not keep being called while the window was inactive
+    /// with the request held, or when the loop did not wait once it was
+    /// released. [runtime_inactive_loop_check.cpp]
+    void finish_inactive_loop_check();
+
     /// Returns the extension's state bits for the running game.
     ///
     /// @return Extension::state's extension_state bits; 0 without the hook
@@ -1669,6 +1697,12 @@ class Runtime final : public menu::Host,
         /// A recorded game played back, which keeps the tier it begins
         /// with until it ends, as a shared game does.
         bool replay{false};
+        /// The match plays at the run's unit limit: a new skirmish, or a
+        /// multiplayer game this machine hosts. It takes a next-game limit an
+        /// extension set (SettingScope::next_game), as a joined multiplayer
+        /// game also does; any other match brings its own limit and leaves
+        /// that limit for the game that asked for it.
+        bool run_unit_limit{false};
     };
 
     /// Builds the match world from the selected map and skirmish slots and enters the match.
@@ -1777,6 +1811,46 @@ class Runtime final : public menu::Host,
     // (src/app/README.md). An extension outside the engine that adds members
     // through OA_RUNTIME_EXTENSION_MEMBERS declares a friend of its own there.
     friend class NetworkPlay;
+    /// Sets the unit limit as a scope says (set_unit_limit in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @param units_per_player the limit, in units per player
+    /// @param scope when it takes effect, and whether the player keeps it
+    friend void set_unit_limit(Runtime& runtime, int32_t units_per_player, SettingScope scope);
+    /// Tells the input method where the focused text field is
+    /// (set_focused_text_field in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @param field the field, in canvas pixels; null clears it
+    friend void set_focused_text_field(Runtime& runtime, const TextField* field);
+    /// Reads one file from the runtime's store (read_game_file in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @param path the file's path in the store
+    /// @param[out] bytes the file's bytes
+    /// @return true when the file was read
+    friend bool
+    read_game_file(const Runtime& runtime, const char* path, std::vector<uint8_t>& bytes);
+    /// Registers or removes a source of the windows an extension shows
+    /// (set_extension_window_source in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @param context identifies the source
+    /// @param source the list of windows; null removes it
+    friend void
+    set_extension_window_source(Runtime& runtime, void* context, ExtensionWindowSource source);
+    /// Returns the clock an extension's idle work follows (extension_clock
+    /// in extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @return the clock, in milliseconds
+    friend uint32_t extension_clock(const Runtime& runtime);
+    /// Returns the simulation hash the run plays under (simulation_hash in
+    /// extension.hpp).
+    ///
+    /// @param runtime the running app
+    /// @return the hash, 64 lower-case hexadecimal digits
+    friend std::string simulation_hash(const Runtime& runtime);
 
     // ---- Touch controls (docs/touch-controls.md) --------------------------------------
 
@@ -3417,6 +3491,14 @@ class Runtime final : public menu::Host,
     /// the first failure.
     void check_paused_save();
 
+    /// Checks the simulation hash an extension reads.
+    ///
+    /// With no mod it is the plain baseline's. With a mod that changes the
+    /// simulation it is that profile's, and not the baseline's. Turning a
+    /// simulation-changing Developer Mode override on then changes it, with
+    /// no new start. Throws std::runtime_error at the first failure.
+    void check_simulation_hash();
+
     /// Checks the services and hooks the screens and the extension reach the
     /// runtime through, on the main menu.
     ///
@@ -3929,6 +4011,19 @@ class Runtime final : public menu::Host,
     /// Runs --check-engine-settings: the main menu's part, the match's and
     /// the settings taking effect.
     void check_engine_settings();
+
+    /// Checks that set_unit_limit stores the unit limit preference and clamps
+    /// it as the setting does (part of --check-engine-settings).
+    void check_unit_limit_preference();
+
+    /// Checks that a unit limit set without saving it plays one match and
+    /// then gives way to the player's setting (part of --check-engine-settings).
+    void check_unsaved_unit_limit_ends_with_its_match();
+
+    /// Puts the run's unit limit back to the player's setting when the match
+    /// ending started under an unsaved one, unless an extension has set
+    /// another unsaved limit for the next game since. Called as a match is torn down.
+    void release_unsaved_unit_limit();
 
     /// Checks the main menu's OA button and dialog (part of --check-engine-settings).
     void check_engine_settings_in_menu();
@@ -13546,6 +13641,29 @@ class Runtime final : public menu::Host,
     // pointer is over it, and only its release over it acts on it.
     std::optional<std::size_t> match_hud_held_;
     bool exit_requested_ = false;
+    // An extension asked the loop to keep running while the window is inactive
+    // (keep_running_while_inactive). Released until an extension holds it.
+    bool keep_running_while_inactive_ = false;
+    // An extension set the next game's unit limit without saving it
+    // (set_unit_limit with SettingScope::next_game), and no new game (a
+    // match at the run's limit, or a multiplayer game) has started under it.
+    bool unsaved_unit_limit_pending_ = false;
+    // The running match started under an unsaved unit limit: its teardown puts
+    // the run's limit back to the player's setting (release_unsaved_unit_limit).
+    bool unsaved_unit_limit_playing_ = false;
+
+    // The windows an extension shows to a program driving the game
+    // (set_extension_window_source), in the order they were first registered.
+    struct ExtensionWindowSourceSlot {
+        void* context{};
+        ExtensionWindowSource source{};
+    };
+
+    std::vector<ExtensionWindowSourceSlot> extension_window_sources_;
+    // Frames of a run a program on this machine controls, one a frame of
+    // idle_tick, before that frame's hooks. extension_clock advances by the
+    // fixed step once a frame from this. 0 before the first frame.
+    uint32_t extension_clock_frame_{};
     // SWITCH on the settings' Switch Mod question ended the run, for main()
     // to start afresh with the mod it stored (soft_restart_requested).
     bool soft_restart_requested_ = false;

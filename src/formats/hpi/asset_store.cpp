@@ -571,16 +571,39 @@ std::vector<DiscoveredArchive> AssetStore::discover(
     return discover(plan, removable_roots);
 }
 
+bool same_archive_file_name(std::string_view left, std::string_view right) {
+    return normalized_path(left) == normalized_path(right);
+}
+
 std::vector<DiscoveredArchive> AssetStore::discover(
     const DiscoveryPlan& plan, std::span<const std::filesystem::path> removable_roots
 ) {
     drop_vanished_mounts();
     std::vector<DiscoveredArchive> report;
+    // A listed name is pulled out of every group and mounted later, in the
+    // list's order. An empty list pulls nothing, so the groups scan as before.
+    const bool pulling = !plan.installation_archives.empty();
+    const auto named = [&](std::string_view name) {
+        for (const auto& archive : plan.installation_archives)
+            if (same_archive_file_name(name, archive))
+                return true;
+        return false;
+    };
+    // The first item of a listing that is the named archive; null when none is.
+    const auto find_named = [](const std::vector<LooseItem>& items,
+                               std::string_view archive) -> const LooseItem* {
+        for (const auto& item : items)
+            if (!dot_entry(item) && same_archive_file_name(item.name, archive))
+                return &item;
+        return nullptr;
+    };
     const auto scan =
         [&](const std::vector<LooseItem>& items, std::string_view pattern, int limit) {
             int remaining = limit;
             for (const auto& item : items) {
                 if (dot_entry(item) || !match_host_pattern(item.name, pattern))
+                    continue;
+                if (pulling && named(item.name))
                     continue;
                 DiscoveredArchive outcome{item.path, false, {}, is_mounted(item.path)};
                 if (!outcome.already_mounted)
@@ -591,12 +614,43 @@ std::vector<DiscoveredArchive> AssetStore::discover(
             }
         };
     const auto folders = merged_listing(loose_roots_, true);
+    // Each removable root is listed once: the installation archives are
+    // sought there after the folders, and its disc scan below reads the same.
+    std::vector<std::vector<LooseItem>> disc_listings;
+    disc_listings.reserve(removable_roots.size());
+    for (const auto& root : removable_roots)
+        disc_listings.push_back(loose_listing(root));
     scan(folders, plan.revision_archive, -1);
     scan(folders, plan.ccx_pattern, -1);
     scan(folders, plan.ufo_pattern, -1);
+    for (const auto& archive : plan.installation_archives) {
+        const LooseItem* found = find_named(folders, archive);
+        for (std::size_t index = 0; found == nullptr && index < disc_listings.size(); ++index)
+            found = find_named(disc_listings[index], archive);
+        if (found == nullptr) {
+            // The game folder is the last root. The name is what the report
+            // and the skip line show; the file is not there to open.
+            std::filesystem::path path{std::u8string(archive.begin(), archive.end())};
+            if (!loose_roots_.empty())
+                path = loose_roots_.back() / path;
+            report.push_back(
+                DiscoveredArchive{
+                    std::move(path),
+                    false,
+                    "installation archive '" + archive + "' is missing",
+                    false
+                }
+            );
+            continue;
+        }
+        DiscoveredArchive outcome{found->path, false, {}, is_mounted(found->path)};
+        if (!outcome.already_mounted)
+            outcome.mounted = try_mount(found->path, &outcome.error);
+        report.push_back(std::move(outcome));
+    }
     scan(folders, plan.hpi_pattern, plan.hpi_limit);
-    for (const auto& root : removable_roots)
-        scan(loose_listing(root), plan.disc_pattern, -1);
+    for (const auto& listing : disc_listings)
+        scan(listing, plan.disc_pattern, -1);
     if (plan.folders_as_disc)
         scan(folders, plan.disc_pattern, -1);
     mark_loose_shadows();

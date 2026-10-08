@@ -263,6 +263,12 @@ std::string freetype_version() {
            std::to_string(FREETYPE_PATCH);
 }
 
+std::span<const Face> fallback_chain(Weight weight) noexcept {
+    if (weight == Weight::bold)
+        return bold_chain;
+    return regular_chain;
+}
+
 int32_t related_pixel_size(int32_t pixel_size) noexcept {
     return std::max((pixel_size * 6 + 3) / 7, std::min(pixel_size, 12));
 }
@@ -395,6 +401,24 @@ std::optional<LineMetrics> FontStack::metrics(const Style& style) {
         line.descent = std::max(line.descent, static_cast<int32_t>((-size.descender + 63) >> 6));
     }
     return line;
+}
+
+std::optional<FaceMetrics> FontStack::face_metrics(Face face, const Style& style) {
+    if (!in_range(style))
+        return std::nullopt;
+    // The emoji face's scaled rows follow its weight, so the weight is set
+    // before the size, as metrics does.
+    if (face == Face::noto_emoji)
+        fonts_->set_emoji_weight(style.weight);
+    const int32_t pixels = face_pixel_size(face, style);
+    if (!fonts_->set_size(face, pixels))
+        return std::nullopt;
+    const FT_Size_Metrics& size = fonts_->faces[static_cast<std::size_t>(face)]->size->metrics;
+    return FaceMetrics{
+        pixels,
+        static_cast<int32_t>((size.ascender + 63) >> 6),
+        static_cast<int32_t>((-size.descender + 63) >> 6),
+    };
 }
 
 std::optional<std::vector<Placement>> FontStack::layout(std::string_view text, const Style& style) {

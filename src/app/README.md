@@ -2196,7 +2196,10 @@ The profile's layout then names the archives discovery mounts
 (`discovery_plan_of`) and the directories of the resources the folder must
 provide; with a mod folder the asset store layers it over the game folder
 (`GameInstall::folders`, `Options::game_folders`), so that it reads exactly
-as a copied install of the same files.
+as a copied install of the same files. `layout.installation-archives` names
+archives from the installation that mount after the mod's own ccx and ufo
+archives and before the hpi group, in the order written; one that is missing
+or cannot be opened makes the folder unusable.
 
 `main` puts the profile in `Options::mod_profile`, and `Runtime::mod_profile()`
 returns it (null for base 3.1c) to everything that reads it: the runtime
@@ -2731,6 +2734,113 @@ Version 13 adds `FrameStage::presented`: the frame hook is called a third
 time each frame, after the frame is drawn and shown, so that an extension
 sees the frame the player saw. Network play does nothing there; the
 automation endpoint answers its frame request.
+
+Version 14 adds the functions below. An extension calls each of them; none
+is a hook, the engine does not call them, and no extension fills them.
+
+An extension calls `player_folder` with the runtime a hook was given, once
+that runtime exists, and reads the player's own folder for the run: where
+saved games, screenshots, films, recordings and mods are kept. The runtime
+makes the choice after the preferences load, which is after `startup`,
+`register_screens` and `ready`, so a call from those hooks reads an empty
+folder. It is not a hook, and no extension fills it.
+
+An extension calls `set_unit_limit` with the runtime a hook was given, once
+that runtime's preferences are loaded, and sets the unit limit, the
+configured limit a game uses, as a `SettingScope` says.
+`SettingScope::immediate`, as a settings page the player uses does, sets
+the player's setting and the next game's limit and writes the preference
+(`open-annihilation.unit-limit`) at once. `SettingScope::next_game`, as for
+a game mode that starts a game at a fixed limit, sets the limit for the
+next new game (a skirmish this machine starts, or a multiplayer game it
+hosts or joins, a joined one playing at its host's limit) and leaves the
+setting and the preferences file as they are; a game that brings its own
+limit (a saved game, a campaign mission, a recording, a restart) neither
+uses nor ends it, and when the match it was set for ends the player's
+setting is the limit again. `SettingScope::next_restart` sets the player's
+setting, which Settings shows at once, and writes the preference; the games
+of the running session keep their limit until the game next starts. A
+value outside the range the setting keeps is clamped into it, as a stored
+preference is. The preferences load after `startup`, `register_screens` and
+`ready`, and that load replaces a limit set from those hooks. It is not a
+hook, and no extension fills it.
+
+An extension calls `keep_running_while_inactive` with the runtime a hook
+was given to hold or release a request that the main loop keep running
+every frame while the window is inactive. Held, the frame hook keeps being
+called there, as it does for a live multiplayer game and for a
+remote-controlled run; released, the loop waits for an event, as it does
+otherwise. The request starts released. Holding it again while it is held
+leaves it held, and releasing it while it is released leaves it released.
+It is not a hook, and no extension fills it.
+`native-running-while-inactive` checks both sides
+([testing.md](../../docs/development/testing.md#the-main-loop-while-inactive)).
+
+An extension calls `web_address_available` to ask whether this machine can
+open a web address in the system's browser. The answer is no on a Steam
+Deck in Game Mode, which has no browser to hand an address to; a Steam Deck
+in its desktop session, and every other machine, answers yes.
+`open_web_address` opens an http or https address there. Any other scheme,
+a missing scheme, and an address whose body holds a space or an ASCII
+control, is refused and is not handed to the browser. `app-web-address`
+checks that through a stub opener
+([testing.md](../../docs/development/testing.md#opening-a-web-address)).
+Neither is a hook, and no extension fills them.
+
+An extension calls `modern_text_chain`, `modern_text_layout` and
+`modern_text_pixels` to read the modern text faces and their fallback chain
+at a pixel size, to lay a line out and to draw it as coverage.
+`message_log_text_size` is the message log's face at the player's Text size
+and the screen's scale. `game_text_preferences_of` holds a text size to the
+sizes the setting offers, and `game_text_preferences` reads the settings in
+effect: "Use modern fonts for game text", including when the language shown
+turns those fonts on, and "Text size". `set_focused_text_field` tells the
+engine where the focused text field is, in canvas pixels, so the input
+method's candidate window and the on-screen keyboard can stand clear of it.
+The caret's distance from the field's left places the candidates beside the
+caret; the game's own fields pass 0. `app-extension-text` checks the face's
+rows at a size, that the settings written and read come back, and that the
+field is handed to a stub
+([testing.md](../../docs/development/testing.md#modern-text-for-an-extension)).
+None of these is a hook, and no extension fills them.
+
+An extension calls `read_game_file` with the runtime a hook was given and a
+path, and reads that whole file from the game's files: the loose files of
+the folders the runtime layers, then the archives it mounted. A loose file
+wins over a file of the same path in any archive, a mod's archive among
+them. Where several loose folders are layered, the first that holds the
+path wins, and a mod's folder is layered ahead of the game folder. Where
+only archives hold the path, the earliest mounted archive wins. Mount order
+after the loose files is the revision archive, the ccx group, the ufo
+group, the installation archives in the order a mod names them, at most ten
+hpi archives, then the disc's archives. A missing file returns false, and
+the call does not throw. `app-read-game-file` checks a loose file, a file
+that only an archive holds, and a missing path
+([testing.md](../../docs/development/testing.md#reading-a-game-file)). It
+is not a hook, and no extension fills it.
+
+An extension calls `set_extension_window_source` with the runtime a hook
+was given, a context of its own and a source, and the endpoint then lists
+that source's windows and controls ahead of the screen's own when a program
+driving the game asks for them (`controls`, with each control's `window`).
+A null source removes it. The same context replaces the source. The source
+is called on the main thread when the controls are asked for, and must not
+change the runtime. `extension_clock` is the clock the extension's idle
+work follows. While the fixed clock is on it is that clock, the match tick
+times one thirtieth of a second. In a run a program on this machine
+controls it advances by that same step once a frame and does not read the
+wall clock. Otherwise it is the steady clock.
+`native-automation-extension-windows`, in a build configured with
+`-DOA_RECORD_EXTENSION_HOOKS=ON`, lists a fixture window's controls, clicks
+its button and reads that clock
+([testing.md](../../docs/development/testing.md#the-automation-endpoint)).
+Neither call is a hook, and no extension fills it.
+
+An extension calls `simulation_hash` with the runtime a hook was given to
+read the simulation hash the run plays under: the profile in play, with
+every Developer Mode override that changes the simulation, or the plain
+baseline when the game plays 3.1c. A running match keeps the hash it
+started with. It is not a hook, and no extension fills it.
 
 `app-extension-list` checks each rule of the combined table over two test
 extensions, and `tests/extension/` tests the boundary itself.

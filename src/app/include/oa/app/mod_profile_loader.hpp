@@ -60,6 +60,8 @@ struct FolderProfile {
     std::vector<std::string> errors{};
     /// Each warning, one a line.
     std::vector<std::string> warnings{};
+    /// The profile file the diagnostics name; empty when the folders play base 3.1c.
+    std::filesystem::path file{};
 };
 
 /// What a game folder's profile is resolved from, so that it can be resolved
@@ -244,8 +246,8 @@ bool seed_registry(
 /// @return the layout
 [[nodiscard]] data::defs::DataLayout data_layout_of(const data::mod_profile::ModProfile* profile);
 
-/// Returns the archive discovery a profile sets: its revision archive and
-/// group patterns, the folders serving as the disc.
+/// Returns the archive discovery a profile sets: its revision archive,
+/// installation archives and group patterns, the folders serving as the disc.
 ///
 /// @param profile the profile; null for the base game's
 /// @return the plan

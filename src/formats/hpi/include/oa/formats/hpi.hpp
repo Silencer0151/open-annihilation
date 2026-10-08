@@ -441,6 +441,17 @@ struct FindScope {
     bool continue_into_mounts = true;
 };
 
+/// Tells whether two archive file names name the same archive.
+///
+/// Discovery and the folder check compare names this way: ASCII letters
+/// without case, and '\\' the same as '/'. Use it wherever an archive's name
+/// is matched against one a mod profile lists.
+///
+/// @param left one file name
+/// @param right the other file name
+/// @return true when they name one archive
+[[nodiscard]] bool same_archive_file_name(std::string_view left, std::string_view right);
+
 // Mount outcome for one archive candidate during discovery.
 struct DiscoveredArchive {
     std::filesystem::path path;
@@ -452,9 +463,12 @@ struct DiscoveredArchive {
 };
 
 /// The archive groups discovery mounts, in mount order: the revision archive,
-/// then the ccx, ufo and hpi groups, each in Windows NTFS name order, then
-/// the disc. A group's pattern names the archives it mounts, matched without
-/// case; a pattern that matches nothing mounts nothing.
+/// then the ccx and ufo groups, each in Windows NTFS name order, then the
+/// installation archives in the order written, then the hpi group in NTFS
+/// name order, then the disc. A group's pattern names the archives it mounts,
+/// matched without case; a pattern that matches nothing mounts nothing. An
+/// empty installation-archive list mounts nothing in that slot, which is the
+/// order of a plan that does not name any.
 struct DiscoveryPlan {
     /// File name of the revision archive, matched without case.
     std::string revision_archive{"rev31.GP3"};
@@ -462,6 +476,13 @@ struct DiscoveryPlan {
     std::string ccx_pattern{"*.CCX"};
     /// Pattern of the group mounted after the ccx group.
     std::string ufo_pattern{"*.UFO"};
+    /// File names of archives from the installation, mounted after the ufo
+    /// group and before the hpi group, in this order, matched as
+    /// same_archive_file_name matches them. Each is sought in the folders,
+    /// then on the removable roots. A listed name is left out of every group,
+    /// including the revision slot when the revision archive is listed and the
+    /// disc scan. Empty mounts nothing extra.
+    std::vector<std::string> installation_archives{};
     /// Pattern of the main group, of which at most hpi_limit mount.
     std::string hpi_pattern{"*.HPI"};
     /// Most archives of the hpi group mounted; a candidate that fails to open
@@ -579,10 +600,15 @@ class AssetStore {
     /// Scans the store's folders and removable roots for archives as a plan says.
     ///
     /// As discover(version, removable_roots), with the plan's revision
-    /// archive, group patterns and hpi limit. Each group's matches in every
-    /// folder of the store are merged by name, the earlier folder's file
-    /// winning, and mount in NTFS name order, so layered folders mount what
-    /// one folder holding the same files would.
+    /// archive, group patterns, installation archives and hpi limit. Each
+    /// group's matches in every folder of the store are merged by name, the
+    /// earlier folder's file winning, and mount in NTFS name order, so
+    /// layered folders mount what one folder holding the same files would.
+    /// Each installation archive is sought by file name in that merged
+    /// listing, then on each removable root in order, and mounted in the
+    /// list's order; one that none of them holds is reported with the error
+    /// "installation archive 'NAME' is missing" and is not mounted. An empty
+    /// list leaves the groups in their usual order.
     ///
     /// @param plan the archive names and patterns
     /// @param removable_roots roots of removable drives searched after the folders' groups

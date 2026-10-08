@@ -176,22 +176,41 @@ void write_window_rect(
     );
 }
 
+/// Collects the controls of the windows extensions show over the screen.
+///
+/// @param endpoint the endpoint, served
+/// @param[out] controls replaced by those controls
+void extension_windows(const Endpoint& endpoint, std::vector<AutomationControl>& controls) {
+    controls.clear();
+    const AutomationHost& host = endpoint.automation_host();
+    if (host.windows != nullptr)
+        host.windows(host.context, &controls);
+}
+
 } // namespace
 
 void collect_controls(const Endpoint& endpoint, std::vector<AutomationControl>& controls) {
     controls.clear();
     const CheckHost& check = endpoint.check_host();
+    const AutomationHost& host = endpoint.automation_host();
     if (multiplayer_screen(check.screen(check.context))) {
         if (mp::multiplayer_showing())
             multiplayer_controls(controls);
-        return;
+    } else {
+        host.controls(host.context, &controls);
+        // A dialog's controls come first among the screen's: they take the
+        // pointer over it.
+        std::stable_partition(
+            controls.begin(), controls.end(), [](const AutomationControl& control) {
+                return !control.dialog.empty();
+            }
+        );
     }
-    const AutomationHost& host = endpoint.automation_host();
-    host.controls(host.context, &controls);
-    // A dialog's controls come first: they take the pointer over the screen's.
-    std::stable_partition(controls.begin(), controls.end(), [](const AutomationControl& control) {
-        return !control.dialog.empty();
-    });
+    // An extension's windows take the pointer over the screen and its dialogs.
+    std::vector<AutomationControl> windows;
+    extension_windows(endpoint, windows);
+    if (!windows.empty())
+        controls.insert(controls.begin(), windows.begin(), windows.end());
 }
 
 std::string_view control_kind_name(AutomationControlKind kind) noexcept {
@@ -277,6 +296,11 @@ void answer_controls(Endpoint& endpoint, const Request& request, Answer& answer)
             json.null();
         else
             json.string(control.dialog);
+        json.key("window");
+        if (control.window.empty())
+            json.null();
+        else
+            json.string(control.window);
         json.key("rect");
         write_rect(json, control.x, control.y, control.width, control.height);
         json.key("window_rect");

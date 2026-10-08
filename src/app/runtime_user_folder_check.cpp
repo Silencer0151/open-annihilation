@@ -138,6 +138,35 @@ void Runtime::check_user_folder() {
         user_folder_ == user_folder_beside(*options_.preferences_file),
         "the player's folder is not \"Open Annihilation\" beside the preferences file"
     );
+    // player_folder, which an extension calls with the runtime, is the
+    // folder that runtime chose: beside the preferences file, then the
+    // preferences' key, then --user-folder, which wins over the key.
+    require(
+        player_folder(*this) == user_folder(),
+        "player_folder is not the folder beside the preferences file"
+    );
+    const fs::path chosen = earlier_root / "chosen-folder";
+    preference_values_[std::string(user_folder_preference)] = path_to_utf8(chosen);
+    start_user_folder();
+    require(
+        player_folder(*this) == user_folder() && user_folder() == chosen,
+        "the preferences' folder did not become the player's"
+    );
+    const fs::path from_option = earlier_root / "option-folder";
+    options_.user_folder = from_option;
+    start_user_folder();
+    require(
+        player_folder(*this) == user_folder() && user_folder() == from_option,
+        "--user-folder did not become the player's folder"
+    );
+    options_.user_folder.reset();
+    preference_values_.clear();
+    start_user_folder();
+    require(
+        player_folder(*this) == user_folder() &&
+            user_folder() == user_folder_beside(*options_.preferences_file),
+        "clearing the overrides did not return the folder beside the preferences file"
+    );
     // Each run starts from nothing: no record, no folder of its own, and
     // saved games and recordings where earlier versions kept them, beside
     // the preferences file and loose in Saves, two saved games named as ones

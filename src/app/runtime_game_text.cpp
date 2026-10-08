@@ -35,11 +35,6 @@ namespace text_font = oa::platform::text_font;
 /// forgotten first.
 constexpr std::size_t kept_lines = 512;
 
-/// The least pixel size ideographs, kana and Hangul are drawn at while a
-/// Chinese, Japanese or Korean language is shown: smaller, their strokes
-/// fill in.
-constexpr int32_t least_cjk_pixel_size = 12;
-
 /// The characters drawn ahead into the glyph store when a Chinese language
 /// comes to be shown, so that its first screen draws few new glyphs on one
 /// core: the 360 hanzi the interface's and the game's texts use most, and
@@ -69,17 +64,17 @@ bool writes_cjk(const oa::data::languages::Language& language) {
 }
 
 /// The pixel size and weight of each face at a scale of 1 and the game
-/// fonts' size: DejaVu Sans Bold 14 px stands as tall as hattfont12, Bold
-/// 11 px as hattfont11, and DejaVu Sans 11 px matches CONSOLE.FNT's
-/// x-height.
+/// fonts' size. DejaVu Sans Bold at message_log_pixel_size stands as tall as
+/// hattfont12, Bold at status_readout_pixel_size as hattfont11, and DejaVu
+/// Sans at label_pixel_size matches CONSOLE.FNT's x-height.
 struct FaceSize {
     int32_t pixel_size{};
     text_font::Weight weight{};
 };
 
-constexpr FaceSize message_face{14, text_font::Weight::bold};
-constexpr FaceSize status_face{11, text_font::Weight::bold};
-constexpr FaceSize label_face{11, text_font::Weight::regular};
+constexpr FaceSize message_face{text_font::message_log_pixel_size, text_font::Weight::bold};
+constexpr FaceSize status_face{text_font::status_readout_pixel_size, text_font::Weight::bold};
+constexpr FaceSize label_face{text_font::label_pixel_size, text_font::Weight::regular};
 
 /// A drawn line in the store, with its place in the order of use.
 struct KeptLine {
@@ -167,7 +162,7 @@ void follow_language(
     if (fonts.language == &language)
         return;
     fonts.language = &language;
-    fonts.least_cjk_size = writes_cjk(language) ? least_cjk_pixel_size : 0;
+    fonts.least_cjk_size = writes_cjk(language) ? text_font::least_cjk_language_pixel_size : 0;
     fonts.lines.clear();
     fonts.order.clear();
     if (fonts.least_cjk_size != 0)

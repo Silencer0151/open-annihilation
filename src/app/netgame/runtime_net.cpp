@@ -832,7 +832,10 @@ struct NetworkPlay::NetHost {
              .place_commanders = false,
              .defeat_allowed = !local_watcher,
              .unit_filter = {&lobby.sync, verdicts ? mark_agreed_units : nullptr},
-             .multiplayer = true}
+             .multiplayer = true,
+             // The host's room starts from the run's limit; a joiner plays
+             // at the host's.
+             .run_unit_limit = state.hosting}
         );
         mp::unit_sync_destroy(lobby);
         if (!runtime.match_ || runtime.altitude_sight_blocked_)

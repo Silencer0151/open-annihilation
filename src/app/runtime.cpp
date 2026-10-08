@@ -472,6 +472,11 @@ int Runtime::run() {
         flush_preferences();
         return 0;
     }
+    if (options_.check_simulation_hash) {
+        check_simulation_hash();
+        flush_preferences();
+        return 0;
+    }
     if (options_.check_patrol_reclaim) {
         check_patrol_reclaim();
         flush_preferences();
@@ -532,13 +537,20 @@ int Runtime::run() {
     bool running = options_.showcase == Showcase::none;
     while (running && !exit_requested_ &&
            (!options_.frame_limit || frames < *options_.frame_limit)) {
+        // The check holds the window inactive before the loop decides whether
+        // to wait, and keeps it so for the whole run.
+        if (options_.check_running_while_inactive)
+            begin_inactive_loop_check();
         park_music_while_inactive();
         SDL_Event event{};
-        // A frame-limited run is scripted and must finish without focus; a
-        // remote-controlled run is served from the frame hooks, every frame.
+        // A frame-limited run is scripted and must finish without focus. A
+        // remote-controlled run is served from the frame hooks every frame,
+        // and so is a run an extension has asked to keep running while the
+        // window is inactive (keep_running_while_inactive).
         const bool live = keeps_running_inactive() || options_.remote_controlled;
-        if (!options_.frame_limit &&
-            oa::platform::application_waits_for_events(application_active_, live, false)) {
+        if (!options_.frame_limit && oa::platform::application_waits_for_events(
+                                         application_active_, live, keep_running_while_inactive_
+                                     )) {
             // While this copy takes a second start's mod packages, it looks
             // for them once a second even in the background.
             if (mod_install::handoff_folder()) {
@@ -555,6 +567,8 @@ int Runtime::run() {
         ++frames;
         pace_next_frame(running);
     }
+    if (options_.check_running_while_inactive)
+        finish_inactive_loop_check();
     if (video_capture_) {
         video_capture_->finish();
         video_capture_.reset();
@@ -589,6 +603,12 @@ void Runtime::run_frame(bool& running) {
 }
 
 void Runtime::dispatch_event(SDL_Event& event, bool& running) {
+    // The inactive-loop check's wake ends the run. It is not a focus change,
+    // and it must not be read as one.
+    if (take_inactive_loop_wake(event)) {
+        exit_requested_ = true;
+        return;
+    }
     note_window_activation(event);
     note_input_activity(event);
     // A hardware keyboard's Cmd alternates stand for their keys while touch
@@ -642,6 +662,11 @@ void Runtime::dispatch_event(SDL_Event& event, bool& running) {
 }
 
 void Runtime::idle_tick() {
+    // A program driving the run reads extension_clock, which advances one
+    // fixed step a frame. The count is this frame, before the frame hooks,
+    // so it matches the frame the endpoint answers with.
+    if (options_.remote_controlled)
+        ++extension_clock_frame_;
     take_frame_time();
     camera_moved_ = false;
     tick_screen_packages();
@@ -663,6 +688,8 @@ void Runtime::idle_tick() {
     if (profiled)
         begin_profile_window();
     call_hook_or_raise<&Extension::frame>(extension_, *this, FrameStage::pump);
+    if (options_.check_running_while_inactive)
+        note_inactive_loop_frame();
     if (profiled)
         mark_profile(OA_PROFILE_SYNC);
     call_hook_or_raise<&Extension::frame>(extension_, *this, FrameStage::after_pump);

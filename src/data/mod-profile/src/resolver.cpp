@@ -15,6 +15,7 @@
 #include <cctype>
 #include <map>
 #include <set>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -275,6 +276,29 @@ std::string lower(std::string_view text) {
     for (char& c : out)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return out;
+}
+
+/// The refusal when installation-archive names differ only in case.
+///
+/// Discovery matches an archive's name without case, so two spellings name
+/// one file. Exact repeats are already refused by the value's distinct rule.
+///
+/// @param value the list of names
+/// @return the message, or empty when no two names fold together
+std::string case_duplicate_archives(const Value& value) {
+    if (value.kind != ValueKind::list)
+        return {};
+    for (size_t left = 0; left < value.items.size(); ++left) {
+        if (value.items[left].kind != ValueKind::string)
+            continue;
+        const std::string folded = lower(value.items[left].text);
+        for (size_t right = left + 1; right < value.items.size(); ++right) {
+            if (value.items[right].kind == ValueKind::string &&
+                lower(value.items[right].text) == folded)
+                return "names that differ only in case name one archive";
+        }
+    }
+    return {};
 }
 
 /// Removes white space at both ends.
@@ -667,6 +691,16 @@ class Resolver {
                 registry::check_value(entry->value, value_from_node(node), path, normal)) {
             error(*problem);
             return;
+        }
+        // distinct compares the spellings as written. This key is matched
+        // without case when the archives are sought, so folded repeats are
+        // the same fault.
+        if (key == "installation-archives") {
+            if (const std::string message = case_duplicate_archives(value_from_node(node));
+                !message.empty()) {
+                error(node.position, path, message);
+                return;
+            }
         }
         given.emplace_back(key, value_from_node(node));
     }
@@ -1689,9 +1723,15 @@ class Resolver {
             return;
         strip_positions(effective);
 
+        // The hashes read a copy with an empty installation-archives list
+        // left out, or the effective profile itself when there is no such
+        // list to leave out. The effective profile still holds the list, and
+        // --print-profile prints the effective profile.
+        const std::optional<Value> stripped = canonical_source(effective);
+        const Value& hashed = stripped ? *stripped : effective;
         Resolution resolution{};
-        resolution.sim = sim_projection(effective);
-        resolution.canonical = canonical_json(effective);
+        resolution.sim = sim_projection(hashed);
+        resolution.canonical = canonical_json(hashed);
         const std::string sim_canonical = canonical_json(resolution.sim);
         resolution.profile.full_hash = base::sha256::digest_of(
             std::span<const uint8_t>{
@@ -1758,6 +1798,36 @@ class Resolver {
             strip_positions(item);
         for (Member& member : value.members)
             strip_positions(member.value);
+    }
+
+    /// Returns the profile the hashes read, when it is not the effective one.
+    ///
+    /// `layout.installation-archives` was added after grammar 1's first
+    /// release. An empty list mounts nothing, the same as a profile that
+    /// never wrote the key, so the canonical form leaves it out and existing
+    /// profiles keep both hashes. A list that names an archive stays, in the
+    /// order written, and the effective profile is read as it is, uncopied.
+    /// The effective profile itself still holds the empty list.
+    ///
+    /// @param effective the effective profile
+    /// @return a copy without the empty list; nothing when there is none to leave out
+    static std::optional<Value> canonical_source(const Value& effective) {
+        const Value* found_layout = find_member(effective, "layout");
+        if (found_layout == nullptr)
+            return std::nullopt;
+        const Value* archives = find_member(*found_layout, "installation-archives");
+        if (archives == nullptr || archives->kind != ValueKind::list || !archives->items.empty())
+            return std::nullopt;
+        Value copy = effective;
+        Value* layout = find_member(copy, "layout");
+        std::vector<Member> kept;
+        kept.reserve(layout->members.size());
+        for (Member& member : layout->members) {
+            if (member.key != "installation-archives")
+                kept.push_back(std::move(member));
+        }
+        layout->members = std::move(kept);
+        return copy;
     }
 
     /// The part of an effective profile the network-play hash covers: sim-scope values only.

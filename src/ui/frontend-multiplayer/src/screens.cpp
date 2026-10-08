@@ -298,10 +298,6 @@ uint32_t service_random_below(void*, uint32_t bound) {
     return static_cast<uint32_t>(std::rand()) % bound;
 }
 
-bool service_disc_present(void*) {
-    return true; // the installed data stands in for the game disc
-}
-
 oa_ref32 service_load_picture(void*, const char* path, int32_t* width, int32_t* height) {
     auto& state = ui();
     if (state.ctx == nullptr || state.ctx->assets == nullptr)
@@ -698,7 +694,6 @@ void bind_boundaries() {
         service_play_sound,
         service_message,
         service_tick,
-        service_disc_present,
         service_display_modes,
         nullptr,
         service_unit_checksum,

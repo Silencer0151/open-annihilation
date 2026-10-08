@@ -421,6 +421,7 @@ void test_blocks() {
     OA_CHECK(profile.identity.side_names[1] == "South");
     OA_CHECK(profile.identity.settings_file == "totala.ini");
     OA_CHECK(profile.layout.revision_archive == "MOD.gp3");
+    OA_CHECK(profile.layout.installation_archives.empty());
     OA_CHECK(profile.layout.directories.units == "unitsX");
     OA_CHECK(profile.layout.directories.weapons == "weaponX");
     OA_CHECK(profile.layout.directories.gamedata == "gamedata");
@@ -450,6 +451,88 @@ void test_blocks() {
     OA_CHECK(profile.rules.script_get.find(71) == ScriptExtension::unit_my_id);
     OA_CHECK(profile.rules.script_get.find(69) == ScriptExtension::none);
     OA_CHECK(profile.rules.script_set.count == 0);
+
+    // Installation archives: the list is kept in the order written, an empty
+    // list is the baseline, and a path, a repeat or two casings are refused.
+    const ResolveResult archives = resolve(
+        profile_text("archives", "layout:\n  installation-archives: [zeta.ccx, addon.ccx]\n")
+    );
+    OA_CHECK(archives.errors.empty() && archives.resolution.has_value());
+    const ResolveResult left_out = resolve(profile_text("minimal"));
+    const ResolveResult none =
+        resolve(profile_text("minimal", "layout:\n  installation-archives: []\n"));
+    OA_CHECK(left_out.resolution && none.resolution);
+    if (left_out.resolution && none.resolution) {
+        // An empty list hashes as a profile that leaves the key out, which is
+        // the hash that profile had before the key existed.
+        OA_CHECK(none.resolution->profile.sim_hash == left_out.resolution->profile.sim_hash);
+        OA_CHECK(none.resolution->profile.full_hash == left_out.resolution->profile.full_hash);
+        OA_CHECK(
+            digest_text(none.resolution->profile.sim_hash) ==
+            "1502111e3b1f69bd93be99405e3c61e0c6337698a7c8502f9f6320e80600094d"
+        );
+        OA_CHECK(
+            digest_text(none.resolution->profile.full_hash) ==
+            "93e104addbcc13711a9c169f9296e63b4bb4b52fe0562e7e23bde7c916d37f02"
+        );
+        OA_CHECK(none.resolution->canonical.find("installation-archives") == std::string::npos);
+        OA_CHECK(text_of(at(*none.resolution, {"layout", "installation-archives"})) == "[]");
+        OA_CHECK(
+            describe_resolution(*none.resolution).find("\"installation-archives\": []") !=
+            std::string::npos
+        );
+    }
+    OA_CHECK(
+        none.resolution && none.resolution->profile.layout.installation_archives.empty() &&
+        none.resolution->profile.layout == Layout{}
+    );
+    if (archives.resolution && left_out.resolution) {
+        OA_CHECK(
+            archives.resolution->profile.layout.installation_archives ==
+            (std::vector<std::string>{"zeta.ccx", "addon.ccx"})
+        );
+        OA_CHECK(
+            text_of(at(*archives.resolution, {"layout", "installation-archives"})) ==
+            "[\"zeta.ccx\",\"addon.ccx\"]"
+        );
+        OA_CHECK(
+            archives.resolution->canonical.find(
+                "\"installation-archives\":[\"zeta.ccx\",\"addon.ccx\"]"
+            ) != std::string::npos
+        );
+        // Naming an archive changes the sim hash. The pins are this profile's.
+        OA_CHECK(archives.resolution->profile.sim_hash != left_out.resolution->profile.sim_hash);
+        OA_CHECK(
+            digest_text(archives.resolution->profile.sim_hash) ==
+            "8b68a6d256edf64bd485c0d6c9487888f46b1b41ed8b7efdb6273a9d46a4fdae"
+        );
+        OA_CHECK(
+            digest_text(archives.resolution->profile.full_hash) ==
+            "9feedf99c534fd7b70012f8b8d559f852ef11ddb90335e822eba2f3b4d43362f"
+        );
+    }
+    OA_CHECK(refused_with(
+        profile_text("archives-slash", "layout:\n  installation-archives: [\"dir/addon.ccx\"]\n"),
+        "does not match"
+    ));
+    OA_CHECK(refused_with(
+        profile_text("archives-dot", "layout:\n  installation-archives: [\".\"]\n"),
+        "does not match"
+    ));
+    OA_CHECK(refused_with(
+        profile_text("archives-empty", "layout:\n  installation-archives: [\"\"]\n"),
+        "does not match"
+    ));
+    OA_CHECK(refused_with(
+        profile_text(
+            "archives-repeat", "layout:\n  installation-archives: [addon.ccx, addon.ccx]\n"
+        ),
+        "repeated items"
+    ));
+    OA_CHECK(refused_with(
+        profile_text("archives-case", "layout:\n  installation-archives: [addon.ccx, Addon.ccx]\n"),
+        "names that differ only in case name one archive"
+    ));
 
     // The index-map form mounts at the indices given; false leaves one empty.
     const ResolveResult indexed = resolve(profile_text(

@@ -95,7 +95,10 @@ game's precedence.
 
 A `DiscoveryPlan` names the revision archive, the pattern of each group and
 the hpi limit; the default plan is the base game's (`rev31.GP3`, `*.CCX`,
-`*.UFO`, ten `*.HPI`). A mod profile's layout replaces them. The store may
+`*.UFO`, ten `*.HPI`). It may also name installation archives, mounted in
+the order written after the ufo group and before the hpi group and left out
+of the other groups; an empty list leaves the order unchanged. A mod
+profile's layout replaces them. The store may
 also be built over several folders layered in order, a mod folder over a base
 folder: a path resolves from the first folder that holds it, listings and
 each discovery group merge the folders by name (the earlier folder's file,

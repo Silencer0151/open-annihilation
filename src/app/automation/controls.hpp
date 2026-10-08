@@ -16,8 +16,8 @@
 
 namespace oa::app::automation {
 
-/// Collects the controls of the screen shown and of the dialog over it,
-/// the dialog's first.
+/// Collects the controls of the windows extensions show, then of the screen
+/// shown and of the dialog over it, the dialog's first among the screen's.
 ///
 /// @param endpoint the endpoint, served
 /// @param[out] controls replaced by the controls

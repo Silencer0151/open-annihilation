@@ -167,4 +167,22 @@ steam_game_mode(std::string_view gamepad_ui, std::string_view current_desktop) n
 /// @return steam_game_mode of this process's environment
 [[nodiscard]] bool running_in_steam_game_mode();
 
+/// Tells whether a web address can be opened on a machine of this kind.
+///
+/// A Steam Deck in Game Mode has no browser to hand an address to, so the
+/// answer is no. A Steam Deck in its desktop session answers yes, and so
+/// does every other machine, including one running Steam's Big Picture.
+///
+/// @param steam_deck the machine is a Steam Deck
+/// @param game_mode the session is Steam's Game Mode
+/// @return false when the machine is a Steam Deck in Game Mode
+[[nodiscard]] bool web_address_available(bool steam_deck, bool game_mode) noexcept;
+
+/// Tells whether this machine can open a web address in the system's browser.
+///
+/// @return web_address_available for this machine: a Steam Deck
+///     (running_steam_deck_model) in Game Mode (running_in_steam_game_mode)
+///     answers no
+[[nodiscard]] bool web_address_available() noexcept;
+
 } // namespace oa::platform

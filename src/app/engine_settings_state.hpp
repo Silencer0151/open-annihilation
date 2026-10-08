@@ -287,7 +287,9 @@ struct Runtime::EngineSettingsState {
     ///
     /// @param runtime the runtime
     /// @param units_per_player the unit limit
-    static void start_skirmish(Runtime& runtime, uint16_t units_per_player);
+    /// @param run_unit_limit the limit is the run's, as for a new skirmish;
+    ///        a restart, which keeps its match's limit, passes false
+    static void start_skirmish(Runtime& runtime, uint16_t units_per_player, bool run_unit_limit);
 
     /// Returns the unit limit a restart of the running match plays at: the
     /// limit it was started with.

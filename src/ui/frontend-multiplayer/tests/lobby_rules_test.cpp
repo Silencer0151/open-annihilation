@@ -44,10 +44,6 @@ void message(void*, const char* text) {
     last_message = text;
 }
 
-bool disc(void*) {
-    return true;
-}
-
 uint32_t first_draw(void*, uint32_t) {
     return 0;
 }
@@ -72,7 +68,6 @@ struct Fixture {
         lobby.net = mp::loopback_lobby_net(loopback);
         lobby.services.message = message;
         lobby.services.tick = tick;
-        lobby.services.disc_present = disc;
         lobby.services.random_below = first_draw;
         lobby.local_version_major = 3;
         if (with_rules)
