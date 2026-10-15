@@ -87,8 +87,10 @@ message(STATUS "Text fonts: FreeType ${OA_FREETYPE_VERSION}, fonts from ${OA_TEX
 #
 # Two directory texts can still name one folder: in a multi-config build
 # several programs are written into <build>/<config>. The staging rules
-# therefore take turns in one Ninja job pool, so no rule empties a folder
-# another is copying into. The programs themselves still build in parallel.
+# therefore take turns, so no rule empties a folder another is copying
+# into: each waits for the rule made before it, which every generator
+# honours, and Ninja also runs them in one job pool. The programs
+# themselves still build in parallel.
 #   oa_copy_text_fonts(<target> <directory>)
 # The directory may be a generator expression, such as the game's
 # OA_GAME_FILES_DIR.
@@ -110,6 +112,11 @@ function(oa_copy_text_fonts target directory)
       COMMENT "Staging text fonts"
       JOB_POOL oa_text_fonts
       VERBATIM)
+    get_property(oa_font_stage_previous GLOBAL PROPERTY OA_TEXT_FONT_STAGE_LAST)
+    if(oa_font_stage_previous)
+      add_dependencies(${oa_font_stage_target} ${oa_font_stage_previous})
+    endif()
+    set_property(GLOBAL PROPERTY OA_TEXT_FONT_STAGE_LAST ${oa_font_stage_target})
   endif()
   add_dependencies(${target} ${oa_font_stage_target})
 endfunction()
