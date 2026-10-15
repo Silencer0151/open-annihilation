@@ -741,8 +741,10 @@ int main() {
         const uint16_t port = closed_port();
         OA_CHECK(port != 0);
         Request request = get("http://127.0.0.1:" + std::to_string(port) + "/x");
-        request.timeouts.connect_ms = 1000;
-        request.timeouts.total_ms = 2000;
+        // Windows tries a refused connection again before it reports the
+        // refusal, about two seconds later; the limits leave room for that.
+        request.timeouts.connect_ms = 5000;
+        request.timeouts.total_ms = 6000;
         std::vector<uint8_t> body;
         Client client;
         const Response response = client.fetch(request, body);
@@ -917,7 +919,11 @@ int main() {
         options.tls = false;
         Client client(options);
         std::vector<uint8_t> body;
-        const Response response = client.fetch(get("https://127.0.0.1:1/oa/registry.yaml"), body);
+        // The port refuses the connection; Windows reports that about two
+        // seconds later, which the connect limit leaves room for.
+        Request request = get("https://127.0.0.1:1/oa/registry.yaml");
+        request.timeouts.connect_ms = 5000;
+        const Response response = client.fetch(request, body);
         note_failure(
             "closed port after an https rewrite needs tls", response, Failure::https_needs_tls
         );
