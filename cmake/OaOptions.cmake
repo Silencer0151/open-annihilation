@@ -97,6 +97,20 @@ if(NOT TARGET oa-options)
       "$<$<CONFIG:Release>:-ffunction-sections;-fdata-sections>")
     target_link_options(oa-options INTERFACE "$<$<CONFIG:Release>:LINKER:--gc-sections>")
   endif()
+  # A Windows program's main thread has the 8 MiB stack that Linux and macOS
+  # give theirs, not Windows' 1 MiB: a debug build keeps every temporary on
+  # the stack, and resetting a screen's state there takes more than 1 MiB.
+  # Only the address space is reserved; pages are committed as they are
+  # used.
+  if(WIN32)
+    if(MSVC)
+      target_link_options(oa-options INTERFACE
+        "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:LINKER:/STACK:8388608>")
+    else()
+      target_link_options(oa-options INTERFACE
+        "$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:LINKER:--stack,8388608>")
+    endif()
+  endif()
   # A 32-bit POSIX build uses 64-bit file offsets and file serial numbers,
   # so it can examine every file and folder a file system holds, however
   # large the file or its serial number.
