@@ -76,7 +76,11 @@ beside the executable elsewhere. Their licences are in the repository's
   included, leaving out a face that is not open.
 - `add_face` adds a pack face. It returns false, changing nothing, when the
   stack already holds `most_pack_faces`, or the file is missing, unreadable
-  or not scalable. `remove_pack_faces` drops every pack face and every glyph
+  or not scalable. On Windows it reads the file whole, up to 64 MiB, and
+  closes it, since Windows does not move a folder while a file in it is
+  open: a language pack is then updated, rolled back or removed while its
+  font is shown. Elsewhere the face reads its file as the base faces do.
+  `remove_pack_faces` drops every pack face and every glyph
   drawn from one, so a face added afterwards may reuse an index without
   drawing the glyphs of the face that left. `pack_face_count` and `has_face`
   report what is open. `face_file_opens` tells whether FreeType opens a file

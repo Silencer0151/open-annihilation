@@ -84,6 +84,30 @@ std::FILE* open_file(const std::filesystem::path& path) {
 #endif
 }
 
+#if defined(_WIN32)
+/// The most bytes a pack's font file may hold where it is read whole.
+constexpr long most_pack_font_bytes = 64L * 1024L * 1024L;
+
+/// Reads a font file whole and closes it.
+///
+/// @param file the file, open for reading; closed on return
+/// @return its bytes; empty when it cannot be read whole, is empty or holds
+///         more than most_pack_font_bytes
+std::vector<uint8_t> read_whole(std::FILE* file) {
+    std::vector<uint8_t> bytes;
+    if (std::fseek(file, 0, SEEK_END) == 0) {
+        const long size = std::ftell(file);
+        if (size > 0 && size <= most_pack_font_bytes && std::fseek(file, 0, SEEK_SET) == 0) {
+            bytes.resize(static_cast<std::size_t>(size));
+            if (std::fread(bytes.data(), 1, bytes.size(), file) != bytes.size())
+                bytes.clear();
+        }
+    }
+    std::fclose(file);
+    return bytes;
+}
+#endif
+
 /// Opens a file already opened as a scalable face. FreeType closes the
 /// stream when the face cannot be made; this closes it when the file is
 /// empty. On failure face is null and stream is cleared.
@@ -173,6 +197,9 @@ struct FontStack::Fonts {
     std::array<int32_t, slot_count> sizes{};
     /// how each pack face is drawn, in the order it was added
     std::array<FaceRole, most_pack_faces> pack_roles{};
+    /// On Windows each pack face's font file, read whole, which its face
+    /// reads from until it is done; empty elsewhere and for no face.
+    std::array<std::vector<uint8_t>, most_pack_faces> pack_bytes{};
     /// pack faces open, at most most_pack_faces
     std::size_t pack_count{};
     /// the weight Noto Emoji's axis was last set to
@@ -455,8 +482,29 @@ bool FontStack::add_face(const std::filesystem::path& file, FaceRole role) {
     if (opened == nullptr)
         return false;
     const std::size_t index = face_count + fonts_->pack_count;
+#if defined(_WIN32)
+    // Windows does not move a folder while a file in it is open, so a pack's
+    // font is read whole and its file closed: the pack can then be updated,
+    // rolled back or removed while its font is shown.
+    std::vector<uint8_t> bytes = read_whole(opened);
+    if (bytes.empty())
+        return false;
+    FT_Face face = nullptr;
+    if (FT_New_Memory_Face(
+            fonts_->library, bytes.data(), static_cast<FT_Long>(bytes.size()), 0, &face
+        ) != 0)
+        return false;
+    if (FT_IS_SCALABLE(face) == 0) {
+        FT_Done_Face(face);
+        return false;
+    }
+    fonts_->faces[index] = face;
+    fonts_->streams[index] = FT_StreamRec{};
+    fonts_->pack_bytes[fonts_->pack_count] = std::move(bytes);
+#else
     if (!fonts_->open_slot(index, opened))
         return false;
+#endif
     fonts_->pack_roles[fonts_->pack_count] = role;
     ++fonts_->pack_count;
     return true;
@@ -478,6 +526,8 @@ void FontStack::remove_pack_faces() noexcept {
             FT_Done_Face(fonts_->faces[slot]);
             fonts_->faces[slot] = nullptr;
         }
+        // The face is done with the bytes it read from.
+        fonts_->pack_bytes[index] = {};
         fonts_->streams[slot] = FT_StreamRec{};
         fonts_->sizes[slot] = 0;
     }
