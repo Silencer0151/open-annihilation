@@ -134,11 +134,11 @@ std::string program_directory() {
             if (narrow_length == 0 || narrow_length >= narrow.size())
                 return {};
             narrow.resize(narrow_length);
-            return as_folder(std::filesystem::path(narrow));
+            return as_folder(std::filesystem::path(narrow).parent_path());
         }
         if (length < wide.size()) {
             wide.resize(length);
-            return as_folder(std::filesystem::path(wide));
+            return as_folder(std::filesystem::path(wide).parent_path());
         }
         if (wide.size() >= 32768)
             return {};

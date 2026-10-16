@@ -525,6 +525,22 @@ void test_app_loop() {
     check(music_focus_action(true, true, true) == Action::none, "open player needs nothing");
 }
 
+/// The program's folder is the folder that holds this test, ending in a
+/// separator, as SDL names it.
+void test_program_directory() {
+    const std::string folder = oa::platform::program_directory();
+    check(!folder.empty(), "the program's folder is known");
+    check(
+        !folder.empty() && (folder.back() == '/' || folder.back() == '\\'),
+        "the program's folder ends in a separator"
+    );
+    std::error_code error;
+    check(
+        std::filesystem::is_directory(std::filesystem::path(folder), error),
+        "the program's folder is a folder, not the program"
+    );
+}
+
 void test_error_log() {
     using namespace oa::platform;
     const auto scratch = oa::test::make_scratch_directory("oa-platform-error-log");
@@ -622,6 +638,7 @@ int main() {
     test_host_heap_use();
     test_proc_memory_fields();
     test_app_loop();
+    test_program_directory();
     test_error_log();
     if (failures != 0) {
         std::fprintf(stderr, "%d platform check(s) failed\n", failures);
