@@ -1013,9 +1013,10 @@ int Runtime::check_render_tiers() {
     std::cout << "render tiers check: the loading screen drew "
               << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
     // The loading screen opened the executor, ran the Full function test
-    // and built and uploaded the terrain pages with the terrain, before the
-    // world was built, letting the atlas's texels go once uploaded; the
-    // first match frame draws from those pages and makes none.
+    // and built and uploaded the terrain pages with the terrain, and the
+    // zoomed-out levels' mosaics, before the world was built, letting the
+    // atlas's texels go once uploaded; the first match frame draws from
+    // those pages and makes none.
     if (asked_level == HardwareAcceleration::full) {
         if (!full_presentation() || !full_ || render_run_->tier.tier != policy::RenderTier::full)
             fail("the full tier was not on as the match loaded");
@@ -1024,9 +1025,15 @@ int Runtime::check_render_tiers() {
             full.pages.size() != full.atlas.pages.size())
             fail("the loading screen did not make the terrain pages");
         const uint64_t pages_alive = full.executor.counts().pages_alive;
+        std::size_t mosaic_pages = 0;
+        for (const auto& pages : full.mosaic_pages)
+            mosaic_pages += pages.size();
         if (full.greyed_pages.size() != full.pages.size() ||
-            pages_alive != full.pages.size() + full.greyed_pages.size())
-            fail("the terrain pages alive are not the loading screen's and their greyed pages");
+            pages_alive != full.pages.size() + full.greyed_pages.size() + mosaic_pages)
+            fail(
+                "the terrain pages alive are not the loading screen's, their greyed pages and "
+                "the mosaics' pages"
+            );
         for (const auto& page : full.atlas.pages)
             if (!page.texels.empty())
                 fail("the atlas kept a page's texels after the page was filled");

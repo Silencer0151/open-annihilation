@@ -563,6 +563,89 @@ void upload_atlas_pages(
     }
 }
 
+/// Returns the texel bytes a level's mosaic takes on the card.
+///
+/// @param mosaic the mosaic
+/// @return the bytes of its chunks' texels
+[[nodiscard]] uint64_t mosaic_bytes(const ft::MosaicLevel& mosaic) noexcept {
+    uint64_t bytes = 0;
+    for (const ft::MosaicChunk& chunk : mosaic.chunks)
+        bytes += uint64_t{chunk.width} * chunk.height * bytes_per_texel;
+    return bytes;
+}
+
+/// Lets a mosaic's pages go and forgets the mosaic.
+///
+/// @param[in,out] executor the executor that made the pages
+/// @param[in,out] mosaic the mosaic, emptied
+/// @param[in,out] pages its pages, destroyed and emptied
+void free_mosaic(
+    card::Executor& executor, ft::MosaicLevel& mosaic, std::vector<card::PageHandle>& pages
+) noexcept {
+    for (const card::PageHandle page : pages)
+        executor.destroy_page(page);
+    pages.clear();
+    mosaic = {};
+}
+
+/// Makes the pages of a level's mosaic from an atlas that still holds its
+/// texels, each chunk's texels read from the atlas as the card would show
+/// them at the level (read_terrain_view): the tiles' own texels, laid side
+/// by side. A chunk that cannot be read, made or filled leaves no pages, and
+/// the level is drawn tile by tile.
+///
+/// @param[in,out] executor the executor
+/// @param atlas the atlas, its texels still held
+/// @param mosaic the level's mosaic
+/// @param[out] pages the executor's page of each chunk, in order; empty on failure
+/// @param[in,out] bytes the texel bytes uploaded, added to
+/// @return true when every chunk's page was made and filled
+bool upload_mosaic_pages(
+    card::Executor& executor,
+    const gw::TerrainAtlas& atlas,
+    const ft::MosaicLevel& mosaic,
+    std::vector<card::PageHandle>& pages,
+    uint64_t& bytes
+) {
+    pages.clear();
+    std::vector<uint8_t> texels;
+    uint64_t made = 0;
+    for (const ft::MosaicChunk& chunk : mosaic.chunks) {
+        const uint32_t pitch = chunk.width * card::texel_bytes;
+        texels.resize(std::size_t{pitch} * chunk.height);
+        const gw::TerrainAtlasError error = gw::read_terrain_view(
+            atlas,
+            mosaic.level,
+            static_cast<int32_t>(chunk.x << mosaic.level),
+            static_cast<int32_t>(chunk.y << mosaic.level),
+            chunk.width,
+            chunk.height,
+            texels.data(),
+            pitch
+        );
+        card::PageDescription description;
+        description.width = chunk.width;
+        description.height = chunk.height;
+        description.level_count = 1;
+        const card::PageHandle page = error == gw::TerrainAtlasError::none
+                                          ? executor.create_page(description)
+                                          : card::PageHandle{};
+        if (page == card::PageHandle{} ||
+            !executor.update_page(page, 0, nullptr, texels.data(), pitch)) {
+            if (page != card::PageHandle{})
+                executor.destroy_page(page);
+            for (const card::PageHandle made_page : pages)
+                executor.destroy_page(made_page);
+            pages.clear();
+            return false;
+        }
+        pages.push_back(page);
+        made += uint64_t{pitch} * chunk.height;
+    }
+    bytes += made;
+    return true;
+}
+
 namespace supersampling = full_supersampling;
 
 static_assert(
@@ -910,6 +993,8 @@ void Runtime::free_full_match_textures() noexcept {
     for (const card::PageHandle page : full.greyed_pages)
         full.executor.destroy_page(page);
     full.greyed_pages.clear();
+    for (std::size_t index = 0; index < ft::mosaic_level_count; ++index)
+        free_mosaic(full.executor, full.mosaics[index], full.mosaic_pages[index]);
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.executor.destroy_target(full.target);
@@ -1217,6 +1302,10 @@ void Runtime::ensure_full_executor() {
         // renderer.
         full.pages.clear();
         full.greyed_pages.clear();
+        for (std::size_t index = 0; index < ft::mosaic_level_count; ++index) {
+            full.mosaics[index] = {};
+            full.mosaic_pages[index].clear();
+        }
         full.card_pages.clear();
         full.pages_from_load = false;
         full.atlas_source = {};
@@ -1281,6 +1370,8 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
     for (const card::PageHandle page : full.greyed_pages)
         full.executor.destroy_page(page);
     full.greyed_pages.clear();
+    for (std::size_t index = 0; index < ft::mosaic_level_count; ++index)
+        free_mosaic(full.executor, full.mosaics[index], full.mosaic_pages[index]);
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.atlas_source = {};
@@ -1325,6 +1416,24 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
         ))
         throw FullCardError("the terrain pages: too little memory");
     const auto upload_start = std::chrono::steady_clock::now();
+    // The zoomed-out levels' mosaics, read from the atlas while it still
+    // holds its texels. They only spare the card work, so where the memory
+    // guard would not take them the levels are drawn tile by tile, and
+    // nothing is lowered.
+    for (std::size_t index = 0; index < ft::mosaic_level_count; ++index) {
+        ft::MosaicLevel mosaic = ft::plan_mosaic_level(
+            full.atlas.grid_width,
+            full.atlas.grid_height,
+            static_cast<uint8_t>(ft::first_mosaic_level + index),
+            page_edge
+        );
+        if (mosaic.chunks.empty() || !accelerated_buffer_fits(mosaic_bytes(mosaic)))
+            continue;
+        if (upload_mosaic_pages(
+                full.executor, full.atlas, mosaic, full.mosaic_pages[index], full.page_bytes
+            ))
+            full.mosaics[index] = std::move(mosaic);
+    }
     upload_atlas_pages(full.executor, full.atlas, full.pages, full.page_bytes, "terrain");
     upload_atlas_pages(full.executor, greyed, full.greyed_pages, full.page_bytes, "greyed terrain");
     full.page_upload_ns = nanoseconds_since(upload_start);
@@ -1848,9 +1957,25 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             std::array<full_fog::GreyedLevel, ft::most_terrain_passes> levels{};
             for (uint32_t index = 0; index < full.plan.pass_count; ++index) {
                 const ft::TerrainPass& pass = full.plan.passes[index];
-                quads += ft::append_terrain_tiles(
-                    frame, full.atlas, full.pages, over_view, pass, over_target, over_scissor
-                );
+                // A zoomed-out level whose mosaic was made is drawn from it,
+                // a few quads whatever the zoom; level 0, and a level without
+                // its mosaic, tile by tile.
+                const std::size_t mosaic = pass.level - ft::first_mosaic_level;
+                if (pass.level >= ft::first_mosaic_level && mosaic < ft::mosaic_level_count &&
+                    !full.mosaic_pages[mosaic].empty())
+                    quads += ft::append_terrain_mosaic(
+                        frame,
+                        full.mosaics[mosaic],
+                        full.mosaic_pages[mosaic],
+                        over_view,
+                        pass,
+                        over_target,
+                        over_scissor
+                    );
+                else
+                    quads += ft::append_terrain_tiles(
+                        frame, full.atlas, full.pages, over_view, pass, over_target, over_scissor
+                    );
                 levels[index] = {pass.level, pass.sampling, 1.0F};
             }
             // The second pass is blended over the first at its alpha, so it

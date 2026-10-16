@@ -175,6 +175,12 @@ struct Runtime::FullPresentation {
     /// table's entries, which the fog's greyed pass reads; it shares the
     /// colour atlas's slots and grid, so only its pages are kept.
     std::vector<card::PageHandle> greyed_pages;
+    /// The zoomed-out levels' mosaics, from full_terrain::first_mosaic_level
+    /// on, and the executor's page of each of a mosaic's chunks, in order. A
+    /// level whose pages were not made, as where the memory guard would not
+    /// take them, is drawn tile by tile.
+    std::array<full_terrain::MosaicLevel, full_terrain::mosaic_level_count> mosaics{};
+    std::array<std::vector<card::PageHandle>, full_terrain::mosaic_level_count> mosaic_pages{};
     uint64_t page_bytes{};     ///< texel bytes uploaded to the pages, greyed ones included
     uint64_t atlas_build_ns{}; ///< the time the atlases took to build
     uint64_t page_upload_ns{}; ///< the time the pages took to make and fill
