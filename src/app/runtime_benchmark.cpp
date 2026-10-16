@@ -166,13 +166,14 @@ void Runtime::benchmark_scene(std::string_view label, std::size_t frames, bool s
     const auto frame_ms = average_ms(total, frames);
     const auto upload_present = phase_times_.upload + phase_times_.present;
     std::printf(
-        "benchmark %-18.*s %zu frames @ %dx%d: %.2f ms/frame (%.1f fps) | sim %.2f | "
+        "benchmark %-18.*s %zu frames @ %dx%d zoom %.3g: %.2f ms/frame (%.1f fps) | sim %.2f | "
         "world %.2f (fog %.2f) | hud %.2f | upload %.2f | present %.2f\n",
         static_cast<int>(label.size()),
         label.data(),
         frames,
         match_layout_.width,
         match_layout_.height,
+        static_cast<double>(match_zoom()),
         frame_ms,
         frame_ms > 0.0 ? 1000.0 / frame_ms : 0.0,
         average_ms(phase_times_.simulation, frames),
@@ -1360,7 +1361,14 @@ int Runtime::run_headless_campaign(std::size_t ticks) {
 }
 
 void Runtime::run_benchmark(std::size_t frames) {
+    // Each match is drawn at the zoom --zoom asks for, within the view's
+    // limits, as a headless match is.
+    const auto take_zoom = [this] {
+        match_zoom_ = std::clamp(options_.match_zoom, least_match_zoom(), most_match_zoom());
+        match_zoom_target_ = match_zoom_;
+    };
     start_benchmark_skirmish();
+    take_zoom();
     benchmark_scene("skirmish static", frames, false);
     benchmark_scene("skirmish scrolling", frames, true);
     leave_match();
@@ -1370,6 +1378,7 @@ void Runtime::run_benchmark(std::size_t frames) {
     start_campaign_mission();
     if (screen_ != Screen::match || !match_)
         throw std::runtime_error("benchmark campaign Start did not enter the mission");
+    take_zoom();
     benchmark_scene("campaign static", frames, false);
     benchmark_scene("campaign scrolling", frames, true);
     print_memory_status();
