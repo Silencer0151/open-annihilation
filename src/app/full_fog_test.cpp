@@ -10,8 +10,9 @@
 // that corner, its texels the right part of its tile on the greyed pages,
 // its batches one for each run on a page, at an aligned camera and a
 // camera between tiles, through a placement, and at two levels; the black
-// pass and the dithered pass with their runs merged and their alphas; and
-// what is refused.
+// pass and the dithered pass with their runs merged and their alphas; the
+// fog mask, its texels the cells at the tile corners, read LINEAR through
+// its quad to the alphas the corners interpolate to; and what is refused.
 #include "full_fog.hpp"
 
 #include "oa/present/world_renderer/world_fog.hpp"
@@ -905,6 +906,266 @@ void level_quads_follow_the_tables() {
     OA_CHECK(near(fog::level_quad(0x7f).colour.alpha, fog::level_quad(0x1f).colour.alpha));
 }
 
+/// Reads a mask's alpha at a point as a LINEAR draw reads a page: the four
+/// texels whose centres are nearest, each weighted by how near, the texels
+/// at the edges standing for those past them.
+///
+/// @param mask the mask
+/// @param texel_x the point across, in texels from the mask's left edge
+/// @param texel_y the point down
+/// @return the alpha, 0 to 1
+float read_linear(const fog::UnseenMask& mask, float texel_x, float texel_y) {
+    const float x = texel_x - 0.5F;
+    const float y = texel_y - 0.5F;
+    const auto left = static_cast<int32_t>(std::floor(x));
+    const auto top = static_cast<int32_t>(std::floor(y));
+    const float across = x - static_cast<float>(left);
+    const float down = y - static_cast<float>(top);
+    const auto value = [&](int32_t column, int32_t row) {
+        column = std::clamp(column, 0, static_cast<int32_t>(mask.width) - 1);
+        row = std::clamp(row, 0, static_cast<int32_t>(mask.height) - 1);
+        return static_cast<float>(mask.texels
+                                      [static_cast<std::size_t>(row) * mask.width +
+                                       static_cast<std::size_t>(column)]
+                                          .alpha) /
+               255.0F;
+    };
+    return value(left, top) * (1.0F - across) * (1.0F - down) +
+           value(left + 1, top) * across * (1.0F - down) +
+           value(left, top + 1) * (1.0F - across) * down + value(left + 1, top + 1) * across * down;
+}
+
+/// The fog mask holds each cell's state at the texel of its tile corner,
+/// the last column and row repeated, and read LINEAR through the quad over
+/// the grid it gives each point of a tile that reaches the map the alpha
+/// the tile's corners interpolate to there, as the greyed pass's quads do; the quad lands on
+/// whole pixels where the placement asks, and a mask not the grid's or a
+/// page too small for it draws nothing.
+void mask_reads_the_corner_alphas() {
+    const Sight sight = mixed_sight();
+    // The corners in the order of the alphas, as columns and rows past the
+    // tile's top-left corner.
+    constexpr std::array<std::pair<int32_t, int32_t>, 4> corner_steps{
+        {{0, 0}, {1, 0}, {0, 1}, {1, 1}}
+    };
+    constexpr std::array<std::pair<float, float>, 6> points{
+        {{0.0F, 0.0F}, {0.25F, 0.25F}, {0.5F, 0.75F}, {0.9F, 0.1F}, {1.0F, 1.0F}, {0.5F, 0.5F}}
+    };
+    for (const auto& [camera_x, camera_z] :
+         {std::pair{0, 0}, std::pair{37, 9}, std::pair{150, 100}}) {
+        const auto grid = sight.fog(camera_x, camera_z);
+        fog::UnseenMask mask;
+        fog::build_unseen_mask(grid, mask);
+        OA_CHECK(mask.width == static_cast<uint32_t>(grid.width) + 2U);
+        OA_CHECK(mask.height == static_cast<uint32_t>(grid.height) + 2U);
+        OA_CHECK(mask.texels.size() == std::size_t{mask.width} * mask.height);
+        if (mask.texels.size() != std::size_t{mask.width} * mask.height)
+            return;
+        const auto texel = [&](uint32_t column, uint32_t row) {
+            return mask.texels[std::size_t{row} * mask.width + column];
+        };
+        // A tile reaches the map where the cells at its corners do: from
+        // the one before the map's first, whose tile straddles the edge.
+        const auto on_map = [&](int32_t column, int32_t row) {
+            const int32_t x = grid.first_cell_x + column;
+            const int32_t z = grid.first_cell_z + row;
+            return x >= -1 && z >= -1 && x < static_cast<int32_t>(map_tiles_wide) &&
+                   z < static_cast<int32_t>(map_tiles_high);
+        };
+        bool any_unseen = false;
+        for (int32_t row = 0; row < grid.height; ++row)
+            for (int32_t column = 0; column < grid.width; ++column) {
+                const auto& tile = grid.at(column, row);
+                any_unseen = any_unseen || tile.unseen != 0;
+                if (!on_map(column, row))
+                    continue;
+                const auto alphas = fog::corner_alphas(tile.unseen);
+                for (std::size_t corner = 0; corner < fog::fog_tile_corners; ++corner) {
+                    const auto held = texel(
+                        static_cast<uint32_t>(column + corner_steps[corner].first),
+                        static_cast<uint32_t>(row + corner_steps[corner].second)
+                    );
+                    OA_CHECK(held.alpha == (alphas[corner] == 1.0F ? 255 : 0));
+                    OA_CHECK(
+                        held.red == held.alpha && held.green == held.alpha &&
+                        held.blue == held.alpha
+                    );
+                }
+            }
+        OA_CHECK(mask.any_unseen == any_unseen);
+        for (uint32_t row = 0; row < mask.height; ++row) {
+            const auto last = texel(mask.width - 1, row);
+            const auto before = texel(mask.width - 2, row);
+            OA_CHECK(last.alpha == before.alpha && last.red == before.red);
+        }
+        for (uint32_t column = 0; column < mask.width; ++column) {
+            const auto last = texel(column, mask.height - 1);
+            const auto before = texel(column, mask.height - 2);
+            OA_CHECK(last.alpha == before.alpha && last.red == before.red);
+        }
+
+        // The quad, from a page larger than the mask.
+        const uint32_t page_width = mask.width + 5;
+        const uint32_t page_height = mask.height + 3;
+        const card::PageHandle page{7};
+        card::CardFrame frame;
+        OA_CHECK(
+            fog::append_unseen_mask(
+                frame,
+                grid,
+                mask,
+                page,
+                page_width,
+                page_height,
+                card::Blend::darken,
+                plain(camera_x, camera_z),
+                {},
+                nullptr
+            ) == 1
+        );
+        const auto quads = quads_of(frame);
+        OA_CHECK(quads.size() == 1 && frame.batches.size() == 1);
+        if (quads.size() != 1 || frame.batches.size() != 1)
+            return;
+        const auto& batch = frame.batches[0];
+        OA_CHECK(
+            batch.page == page && batch.level == 0 && batch.blend == card::Blend::darken &&
+            batch.sampling == card::Sampling::linear && !batch.scissored
+        );
+        // Half a tile past the grid's tiles each way, textured by whole
+        // texels: the cells' from the first's edge.
+        const auto& corners = quads[0].corners;
+        OA_CHECK(near(corners[0].x, static_cast<float>(grid.offset_x - tile_edge / 2)));
+        OA_CHECK(near(corners[0].y, static_cast<float>(grid.offset_z - tile_edge / 2)));
+        OA_CHECK(
+            near(corners[2].x - corners[0].x, static_cast<float>((grid.width + 1) * tile_edge))
+        );
+        OA_CHECK(
+            near(corners[2].y - corners[0].y, static_cast<float>((grid.height + 1) * tile_edge))
+        );
+        OA_CHECK(corners[0].u == 0.0F && corners[0].v == 0.0F);
+        OA_CHECK(
+            near(corners[2].u * static_cast<float>(page_width), static_cast<float>(grid.width + 1))
+        );
+        OA_CHECK(near(
+            corners[2].v * static_cast<float>(page_height), static_cast<float>(grid.height + 1)
+        ));
+        for (const auto& corner : corners)
+            OA_CHECK(
+                corner.colour.red == 1.0F && corner.colour.green == 1.0F &&
+                corner.colour.blue == 1.0F && corner.colour.alpha == 1.0F
+            );
+        // Each point of each tile, read through the quad's texture
+        // coordinates as the card interpolates them across it.
+        for (int32_t row = 0; row < grid.height; ++row)
+            for (int32_t column = 0; column < grid.width; ++column) {
+                if (!on_map(column, row))
+                    continue;
+                const auto alphas = fog::corner_alphas(grid.at(column, row).unseen);
+                for (const auto& [u, v] : points) {
+                    const float x =
+                        corners[0].x + (static_cast<float>(column) + 0.5F + u) * tile_edge;
+                    const float y = corners[0].y + (static_cast<float>(row) + 0.5F + v) * tile_edge;
+                    const float across = (x - corners[0].x) / (corners[2].x - corners[0].x);
+                    const float down = (y - corners[0].y) / (corners[2].y - corners[0].y);
+                    const float texel_x =
+                        (corners[0].u + across * (corners[2].u - corners[0].u)) * page_width;
+                    const float texel_y =
+                        (corners[0].v + down * (corners[2].v - corners[0].v)) * page_height;
+                    const float wanted = alphas[0] * (1.0F - u) * (1.0F - v) +
+                                         alphas[1] * u * (1.0F - v) + alphas[2] * (1.0F - u) * v +
+                                         alphas[3] * u * v;
+                    OA_CHECK(std::fabs(read_linear(mask, texel_x, texel_y) - wanted) <= 1e-4F);
+                }
+            }
+
+        // A mask not the grid's, or a page smaller than the mask, draws
+        // nothing.
+        card::CardFrame refused;
+        fog::UnseenMask other = mask;
+        other.width += 1;
+        OA_CHECK(
+            fog::append_unseen_mask(
+                refused,
+                grid,
+                other,
+                page,
+                page_width + 1,
+                page_height,
+                card::Blend::darken,
+                plain(camera_x, camera_z),
+                {},
+                nullptr
+            ) == 0
+        );
+        OA_CHECK(
+            fog::append_unseen_mask(
+                refused,
+                grid,
+                mask,
+                page,
+                mask.width - 1,
+                page_height,
+                card::Blend::darken,
+                plain(camera_x, camera_z),
+                {},
+                nullptr
+            ) == 0
+        );
+        OA_CHECK(refused.vertices.empty() && refused.batches.empty());
+    }
+
+    // At a sixth on whole pixels the quad's edges are whole pixels, its
+    // blend the one asked for.
+    {
+        fog::FogPlacement placement;
+        placement.camera_x = 150;
+        placement.camera_z = 100;
+        placement.origin_x = 10.25F;
+        placement.origin_y = 20.5F;
+        placement.scale = 1.0F / 6.0F;
+        placement.whole_pixels = true;
+        const auto grid = sight.fog(150, 100);
+        fog::UnseenMask mask;
+        fog::build_unseen_mask(grid, mask);
+        card::CardFrame frame;
+        OA_CHECK(
+            fog::append_unseen_mask(
+                frame,
+                grid,
+                mask,
+                {3},
+                mask.width,
+                mask.height,
+                card::Blend::modulate,
+                placement,
+                {},
+                nullptr
+            ) == 1
+        );
+        for (const auto& vertex : frame.vertices)
+            OA_CHECK(vertex.x == std::round(vertex.x) && vertex.y == std::round(vertex.y));
+        OA_CHECK(frame.batches.size() == 1 && frame.batches[0].blend == card::Blend::modulate);
+    }
+
+    // Everything seen: a mask with nothing out of sight; an empty grid: none.
+    {
+        const Sight seen;
+        fog::UnseenMask mask;
+        fog::build_unseen_mask(seen.fog(0, 0), mask);
+        OA_CHECK(!mask.any_unseen && mask.width != 0);
+        fog::build_unseen_mask({}, mask);
+        OA_CHECK(mask.width == 0 && mask.height == 0 && mask.texels.empty() && !mask.any_unseen);
+        card::CardFrame frame;
+        OA_CHECK(
+            fog::append_unseen_mask(
+                frame, {}, mask, {3}, 16, 16, card::Blend::darken, plain(0, 0), {}, nullptr
+            ) == 0
+        );
+        OA_CHECK(frame.vertices.empty() && frame.batches.empty());
+    }
+}
+
 /// An empty grid, a level past the tile levels, too few pages and no level
 /// add nothing.
 void refusals_add_nothing() {
@@ -960,13 +1221,14 @@ int main() {
     whole_pixels_meet_at_a_sixth();
     solid_passes_merge_their_runs();
     level_quads_follow_the_tables();
+    mask_reads_the_corner_alphas();
     refusals_add_nothing();
     if (oa::test::check_exit_status() != 0)
         return 1;
     std::puts(
         "full fog: the greyed pass covers the ground out of sight once at its tiles' texels, "
         "the black and dithered passes their tiles with runs merged, at the corner alphas; "
-        "shade and light levels as quads"
+        "the fog mask reads the corner alphas across each tile; shade and light levels as quads"
     );
     return 0;
 }

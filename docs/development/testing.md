@@ -547,8 +547,9 @@ walk runs:
   `app-full-models` and `app-full-models-data` hold the model stage to the
   processor's raster the same way, over synthetic scenes and over every
   unit model of the installed game; `app-full-fog` checks the fog passes'
-  quads, corner alphas and placement and the painters' level quads with no
-  renderer at all;
+  quads, corner alphas and placement, the fog mask's texels and its LINEAR
+  read to those alphas, and the painters' level quads with no renderer at
+  all;
 - `native-renderer-ladder` (`--check-renderer-ladder`) forces each failure
   the game handles while it runs and checks that it presents on through
   it, each frame after a failure equal to the frame composed on the

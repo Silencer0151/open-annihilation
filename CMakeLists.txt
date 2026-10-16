@@ -447,7 +447,8 @@ if(BUILD_TESTING)
   # synthetic sight: the greyed pass covering the ground out of sight once,
   # whole tiles and quarters at their texels and corner alphas, at two
   # levels and through a placement; the black and dithered passes with
-  # their runs merged; the refusals.
+  # their runs merged; the fog mask read LINEAR to the corner alphas; the
+  # refusals.
   add_executable(oa-app-full-fog-test src/app/full_fog_test.cpp)
   target_link_libraries(oa-app-full-fog-test PRIVATE oa-app-full-fog oa-sim-visibility-state
     oa-test-support oa-options)

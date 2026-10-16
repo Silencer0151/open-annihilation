@@ -7,7 +7,8 @@
 // atlas, built and uploaded as the match loads as texture pages with their
 // levels, by the level rule of full_terrain.hpp; the fog's greyed pass goes
 // over it from the greyed atlas, built with a palette of the gray table's
-// entries, or its dithered form; the model stage's shadows, then the list's
+// entries, or from the greyed mosaics by the fog mask (full_fog.hpp), or
+// its dithered form; the model stage's shadows, then the list's
 // sprites, particles, lines, units, projectiles and debris in the planner's
 // order from the sprite pages and the models' meshes (runtime_full.hpp);
 // the fog's black pass over never-mapped ground; and the quads the painters
@@ -574,17 +575,29 @@ void upload_atlas_pages(
     return bytes;
 }
 
-/// Lets a mosaic's pages go and forgets the mosaic.
+/// The texels a fog mask's page is made larger than the mask by, rounded up
+/// to, across and down: a grid that grows by a tile or two as the zoom
+/// eases fits the page it has.
+constexpr uint32_t fog_mask_page_step = 64;
+
+/// Lets a mosaic's pages and its greyed pages go and forgets the mosaic.
 ///
 /// @param[in,out] executor the executor that made the pages
 /// @param[in,out] mosaic the mosaic, emptied
 /// @param[in,out] pages its pages, destroyed and emptied
+/// @param[in,out] greyed_pages its greyed pages, destroyed and emptied
 void free_mosaic(
-    card::Executor& executor, ft::MosaicLevel& mosaic, std::vector<card::PageHandle>& pages
+    card::Executor& executor,
+    ft::MosaicLevel& mosaic,
+    std::vector<card::PageHandle>& pages,
+    std::vector<card::PageHandle>& greyed_pages
 ) noexcept {
     for (const card::PageHandle page : pages)
         executor.destroy_page(page);
     pages.clear();
+    for (const card::PageHandle page : greyed_pages)
+        executor.destroy_page(page);
+    greyed_pages.clear();
     mosaic = {};
 }
 
@@ -930,6 +943,14 @@ void Runtime::FullPresentation::destroy_moved_targets() noexcept {
     moved_target_factor = 0;
 }
 
+void Runtime::FullPresentation::destroy_fog_mask() noexcept {
+    executor.destroy_page(fog_mask_page);
+    fog_mask_page = {};
+    fog_mask_page_width = 0;
+    fog_mask_page_height = 0;
+    fog_mask_held = {};
+}
+
 void Runtime::FullPresentation::destroy_world_target() noexcept {
     executor.destroy_target(world_target);
     world_target = {};
@@ -994,7 +1015,13 @@ void Runtime::free_full_match_textures() noexcept {
         full.executor.destroy_page(page);
     full.greyed_pages.clear();
     for (std::size_t index = 0; index < ft::mosaic_level_count; ++index)
-        free_mosaic(full.executor, full.mosaics[index], full.mosaic_pages[index]);
+        free_mosaic(
+            full.executor,
+            full.mosaics[index],
+            full.mosaic_pages[index],
+            full.greyed_mosaic_pages[index]
+        );
+    full.destroy_fog_mask();
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.executor.destroy_target(full.target);
@@ -1305,7 +1332,12 @@ void Runtime::ensure_full_executor() {
         for (std::size_t index = 0; index < ft::mosaic_level_count; ++index) {
             full.mosaics[index] = {};
             full.mosaic_pages[index].clear();
+            full.greyed_mosaic_pages[index].clear();
         }
+        full.fog_mask_page = {};
+        full.fog_mask_page_width = 0;
+        full.fog_mask_page_height = 0;
+        full.fog_mask_held = {};
         full.card_pages.clear();
         full.pages_from_load = false;
         full.atlas_source = {};
@@ -1371,7 +1403,12 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
         full.executor.destroy_page(page);
     full.greyed_pages.clear();
     for (std::size_t index = 0; index < ft::mosaic_level_count; ++index)
-        free_mosaic(full.executor, full.mosaics[index], full.mosaic_pages[index]);
+        free_mosaic(
+            full.executor,
+            full.mosaics[index],
+            full.mosaic_pages[index],
+            full.greyed_mosaic_pages[index]
+        );
     full.page_bytes = 0;
     full.pages_from_load = false;
     full.atlas_source = {};
@@ -1415,10 +1452,12 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
         throw FullCardError("the terrain pages: too little memory");
     const auto upload_start = std::chrono::steady_clock::now();
     // The zoomed-out levels' mosaics, read from the atlas while it still
-    // holds its texels, before the atlases' pages are made. They only spare
-    // the card work, so the guard judges each with those pages still to come:
-    // where it would not take both, the level is drawn tile by tile, and the
-    // pages keep the memory they were allowed.
+    // holds its texels, before the atlases' pages are made, and each again
+    // from the greyed atlas for the fog's masked greyed pass. They only
+    // spare the card work, so the guard judges each with those pages still
+    // to come: where it would not take both, the level is drawn tile by
+    // tile, or its greyed pass is, and the pages keep the memory they were
+    // allowed.
     for (std::size_t index = 0; index < ft::mosaic_level_count; ++index) {
         ft::MosaicLevel mosaic = ft::plan_mosaic_level(
             full.atlas.grid_width,
@@ -1428,10 +1467,15 @@ void Runtime::ensure_full_terrain_pages(const oa::PaletteBytes& palette) {
         );
         if (mosaic.chunks.empty() || !accelerated_buffer_fits(atlas_bytes + mosaic_bytes(mosaic)))
             continue;
-        if (upload_mosaic_pages(
+        if (!upload_mosaic_pages(
                 full.executor, full.atlas, mosaic, full.mosaic_pages[index], full.page_bytes
             ))
-            full.mosaics[index] = std::move(mosaic);
+            continue;
+        if (accelerated_buffer_fits(atlas_bytes + mosaic_bytes(mosaic)))
+            std::ignore = upload_mosaic_pages(
+                full.executor, greyed, mosaic, full.greyed_mosaic_pages[index], full.page_bytes
+            );
+        full.mosaics[index] = std::move(mosaic);
     }
     upload_atlas_pages(full.executor, full.atlas, full.pages, full.page_bytes, "terrain");
     upload_atlas_pages(full.executor, greyed, full.greyed_pages, full.page_bytes, "greyed terrain");
@@ -1636,12 +1680,8 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         // everything, drawn after the stages.
         const auto& fog = full.fog;
         const bool fogged = !fog.grid.tiles.empty();
-        const auto append_unseen = [&](const ft::TerrainView& where,
-                                       std::span<const full_fog::GreyedLevel> levels,
-                                       card::TargetHandle target,
-                                       const card::Rect* scissor) {
-            if (!fogged || fog.dithered)
-                return;
+        // Where the fog grid lands in a view.
+        const auto fog_placement = [&](const ft::TerrainView& where) {
             full_fog::FogPlacement placement;
             placement.camera_x = fog.camera_x;
             placement.camera_z = fog.camera_z;
@@ -1649,8 +1689,23 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             placement.origin_y = where.origin_y;
             placement.scale = where.scale;
             placement.whole_pixels = where.whole_pixels;
+            return placement;
+        };
+        const auto append_unseen = [&](const ft::TerrainView& where,
+                                       std::span<const full_fog::GreyedLevel> levels,
+                                       card::TargetHandle target,
+                                       const card::Rect* scissor) {
+            if (!fogged || fog.dithered)
+                return;
             fog_quads += full_fog::append_unseen_terrain(
-                frame, fog.grid, full.atlas, full.greyed_pages, levels, placement, target, scissor
+                frame,
+                fog.grid,
+                full.atlas,
+                full.greyed_pages,
+                levels,
+                fog_placement(where),
+                target,
+                scissor
             );
         };
 
@@ -1781,13 +1836,7 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                                          const card::Rect* scissor) {
             if (!fogged)
                 return;
-            full_fog::FogPlacement placement;
-            placement.camera_x = fog.camera_x;
-            placement.camera_z = fog.camera_z;
-            placement.origin_x = where.origin_x;
-            placement.origin_y = where.origin_y;
-            placement.scale = where.scale;
-            placement.whole_pixels = where.whole_pixels;
+            const full_fog::FogPlacement placement = fog_placement(where);
             if (fog.dithered)
                 fog_quads += full_fog::append_unseen_dither(
                     frame, fog.grid, fog.dither, placement, target, scissor
@@ -1795,6 +1844,144 @@ bool Runtime::present_full_match_layers(bool dialogs) {
             fog_quads += full_fog::append_unmapped(
                 frame, fog.grid, fog.unmapped, placement, target, scissor
             );
+        };
+        // The fog mask of the frame's grid on its page, which is made with
+        // room to spare where the mask outgrows it, as far as the memory
+        // guard allows, and filled again only where the mask changed.
+        const auto ensure_fog_mask = [&]() {
+            full_fog::build_unseen_mask(fog.grid, full.fog_mask);
+            const auto& mask = full.fog_mask;
+            if (mask.width == 0)
+                return false;
+            if (!mask.any_unseen)
+                return true;
+            if (mask.width > full.fog_mask_page_width || mask.height > full.fog_mask_page_height) {
+                const uint32_t edge_limit =
+                    limit == render_policy::unlimited_texture_size
+                        ? card::largest_page_edge
+                        : std::min<uint32_t>(limit, card::largest_page_edge);
+                const auto roomy = [&](uint32_t texels) {
+                    return std::min(
+                        (texels + fog_mask_page_step - 1) / fog_mask_page_step * fog_mask_page_step,
+                        edge_limit
+                    );
+                };
+                card::PageDescription description;
+                description.width = roomy(mask.width);
+                description.height = roomy(mask.height);
+                if (description.width < mask.width || description.height < mask.height ||
+                    !accelerated_buffer_fits(
+                        uint64_t{description.width} * description.height * bytes_per_texel
+                    ))
+                    return false;
+                full.destroy_fog_mask();
+                full.fog_mask_page = full.executor.create_page(description);
+                if (full.fog_mask_page == card::PageHandle{})
+                    return false;
+                full.fog_mask_page_width = description.width;
+                full.fog_mask_page_height = description.height;
+            }
+            const auto& held = full.fog_mask_held;
+            if (held.width == mask.width && held.height == mask.height &&
+                std::memcmp(
+                    held.texels.data(), mask.texels.data(), mask.texels.size() * sizeof(card::Texel)
+                ) == 0)
+                return true;
+            const card::Rect part{
+                0, 0, static_cast<int32_t>(mask.width), static_cast<int32_t>(mask.height)
+            };
+            if (!full.executor.update_page(
+                    full.fog_mask_page,
+                    0,
+                    &part,
+                    reinterpret_cast<const uint8_t*>(mask.texels.data()),
+                    mask.width * card::texel_bytes
+                )) {
+                full.fog_mask_held = {};
+                return false;
+            }
+            full.fog_mask_held = mask;
+            return true;
+        };
+        // The fog's greyed pass into the moved target by the fog mask, in a
+        // few quads whatever the fog, where every level the terrain was drawn
+        // at came from its mosaic and has its greyed mosaic, and the shifted
+        // target, which nothing reads until the move, can hold the greyed
+        // picture: the colour terrain darkened by the mask; the shifted
+        // target cleared transparent, each greyed level added into it at its
+        // share, which leaves its alpha 0, and the sum scaled by the mask;
+        // and that resolved over the colour as premultiplied, which at alpha
+        // 0 adds it, so that each pixel shows the colour and the grey at the
+        // alpha the corners interpolate to there. False where the pass is to
+        // be drawn tile by tile, as it is into any target but the moved one.
+        const auto append_masked_unseen = [&](const ft::TerrainView& where,
+                                              std::span<const full_fog::GreyedLevel> levels,
+                                              card::TargetHandle target) {
+            if (!fogged || fog.dithered || full.fog_mask_off || target == card::TargetHandle{} ||
+                target != full.moved_target || full.shifted_target == card::TargetHandle{} ||
+                levels.size() != full.plan.pass_count)
+                return false;
+            for (uint32_t index = 0; index < full.plan.pass_count; ++index) {
+                const std::size_t mosaic = full.plan.passes[index].level - ft::first_mosaic_level;
+                if (full.plan.passes[index].level < ft::first_mosaic_level ||
+                    mosaic >= ft::mosaic_level_count || full.mosaic_pages[mosaic].empty() ||
+                    full.greyed_mosaic_pages[mosaic].empty())
+                    return false;
+            }
+            if (!ensure_fog_mask())
+                return false;
+            if (!full.fog_mask.any_unseen)
+                return true;
+            const full_fog::FogPlacement placement = fog_placement(where);
+            const auto append_mask = [&](card::Blend blend, card::TargetHandle into) {
+                fog_quads += full_fog::append_unseen_mask(
+                    frame,
+                    fog.grid,
+                    full.fog_mask,
+                    full.fog_mask_page,
+                    full.fog_mask_page_width,
+                    full.fog_mask_page_height,
+                    blend,
+                    placement,
+                    into,
+                    nullptr
+                );
+            };
+            append_mask(card::Blend::darken, full.moved_target);
+            card::Batch clear;
+            clear.operation = card::Operation::clear;
+            clear.target = full.shifted_target;
+            clear.colour = card::Colour{0.0F, 0.0F, 0.0F, 0.0F};
+            frame.batches.push_back(clear);
+            for (uint32_t index = 0; index < full.plan.pass_count; ++index) {
+                ft::TerrainPass pass = full.plan.passes[index];
+                pass.blend = card::Blend::additive;
+                pass.alpha = levels[index].share;
+                const std::size_t mosaic = pass.level - ft::first_mosaic_level;
+                fog_quads += ft::append_terrain_mosaic(
+                    frame,
+                    full.mosaics[mosaic],
+                    full.greyed_mosaic_pages[mosaic],
+                    where,
+                    pass,
+                    full.shifted_target,
+                    nullptr
+                );
+            }
+            append_mask(card::Blend::modulate, full.shifted_target);
+            card::Batch added;
+            added.operation = card::Operation::resolve;
+            added.source = full.shifted_target;
+            added.target = full.moved_target;
+            added.blend = card::Blend::alpha_premultiplied;
+            added.destination = {
+                0,
+                0,
+                static_cast<int32_t>(full.moved_target_width),
+                static_cast<int32_t>(full.moved_target_height)
+            };
+            frame.batches.push_back(added);
+            return true;
         };
         bool fog_in_target = false;
         // Below zoom 1 the battlefield is drawn into the moved target, a
@@ -1983,12 +2170,11 @@ bool Runtime::present_full_match_layers(bool dialogs) {
                 levels[1].share = std::clamp(full.plan.passes[1].alpha, 0.0F, 1.0F);
                 levels[0].share = 1.0F - levels[1].share;
             }
-            append_unseen(
-                over_view,
-                std::span<const full_fog::GreyedLevel>(levels.data(), full.plan.pass_count),
-                over_target,
-                over_scissor
+            const std::span<const full_fog::GreyedLevel> drawn_levels(
+                levels.data(), full.plan.pass_count
             );
+            if (!append_masked_unseen(over_view, drawn_levels, over_target))
+                append_unseen(over_view, drawn_levels, over_target, over_scissor);
             emit_stages(
                 static_cast<float>(painted.x), static_cast<float>(painted.y), 1.0F, over_target
             );

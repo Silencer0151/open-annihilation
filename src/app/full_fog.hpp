@@ -14,6 +14,12 @@
 //   blended over the colour terrain by the corner alphas, so a tile whose
 //   four corners are out of sight shows the gray table's colours exactly
 //   and a tile at an edge ramps from colour to grey;
+// - its masked form, the same picture in a few quads whatever the fog: the
+//   fog mask, a texel for each sight cell at the grid's tile corners, read
+//   LINEAR so that it gives the corner alphas interpolated across each
+//   tile, darkens the colour terrain by the alpha and scales the greyed
+//   terrain, drawn whole in a target of its own, by it, and the greyed
+//   picture is then added over the colour;
 // - its dithered form, a solid quad of the dither colour at half the alpha,
 //   the even tone the dither averages to, drawn over the objects;
 // - the black pass over cells never mapped, a solid quad per tile.
@@ -33,6 +39,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace oa::app::full_fog {
 
@@ -147,6 +154,64 @@ uint32_t append_unseen_terrain(
     const oa::present::gpu_world::TerrainAtlas& atlas,
     std::span<const card::PageHandle> greyed_pages,
     std::span<const GreyedLevel> levels,
+    const FogPlacement& placement,
+    card::TargetHandle target,
+    const card::Rect* scissor
+);
+
+/// The fog mask of a grid: a texel for each sight cell at a corner of the
+/// grid's tiles, (width + 1) by (height + 1), every byte 255 where the cell
+/// is out of sight and 0 where it is in sight, so that a LINEAR read between
+/// the texels' centres gives the alpha a greyed tile's corners interpolate
+/// to there; then a column and a row more, repeating the last ones, so that
+/// a read at the far texels' centres takes nothing from past them.
+struct UnseenMask {
+    uint32_t width{};                ///< texels across: the grid's tiles and 2; 0 for an empty grid
+    uint32_t height{};               ///< texels down: the grid's tiles and 2
+    std::vector<card::Texel> texels; ///< row by row, width times height
+    bool any_unseen{};               ///< a cell is out of sight, so the mask draws something
+};
+
+/// Builds a grid's fog mask, each cell out of sight where any tile it is a
+/// corner of says so (FogTile::unseen): the tiles that reach the map agree
+/// on each cell, and a tile wholly past the map's edge, which nothing draws,
+/// marks none.
+///
+/// @param grid the fog grid
+/// @param[out] mask the mask; empty for an empty grid
+void build_unseen_mask(const oa::present::world_renderer::FogGrid& grid, UnseenMask& mask);
+
+/// Appends the fog mask over the grid's tiles: one quad, white at alpha 1,
+/// from half a tile before the first tile's top-left corner to half a tile
+/// past the last tile's bottom-right corner, textured LINEAR by the mask's
+/// cells from the first texel's edge to the last cell's far edge, so that
+/// each cell's centre lands on its tile corner and each point of a tile
+/// reads the alpha its corners interpolate to there. The texture spans
+/// whole texels, which a renderer that reads a quad's texture as a
+/// rectangle of whole texels, as SDL's software renderer does, reads as
+/// given. Drawn by card::Blend::darken it scales what is under it by one
+/// less the alpha; by card::Blend::modulate, by the alpha.
+///
+/// @param[in,out] frame the frame
+/// @param grid the fog grid, built for the placement's camera
+/// @param mask the grid's mask (build_unseen_mask)
+/// @param page the page holding the mask from its top-left texel
+/// @param page_width texels across the page, at least the mask's
+/// @param page_height texels down the page, at least the mask's
+/// @param blend how the mask is drawn
+/// @param placement where the grid lands in the target
+/// @param target the target the quad is drawn into; none for the window
+/// @param scissor the pixels of the target the draw may write; null for all
+/// @return quads appended: 1, or 0 for an empty grid, a mask not the
+///         grid's or a page smaller than the mask
+uint32_t append_unseen_mask(
+    card::CardFrame& frame,
+    const oa::present::world_renderer::FogGrid& grid,
+    const UnseenMask& mask,
+    card::PageHandle page,
+    uint32_t page_width,
+    uint32_t page_height,
+    card::Blend blend,
     const FogPlacement& placement,
     card::TargetHandle target,
     const card::Rect* scissor

@@ -15,6 +15,7 @@
 
 #include "oa/app/runtime.hpp"
 
+#include "full_fog.hpp"
 #include "full_supersampling.hpp"
 #include "full_terrain.hpp"
 #include "oa/app/card/executor.hpp"
@@ -181,6 +182,12 @@ struct Runtime::FullPresentation {
     /// take them, is drawn tile by tile.
     std::array<full_terrain::MosaicLevel, full_terrain::mosaic_level_count> mosaics{};
     std::array<std::vector<card::PageHandle>, full_terrain::mosaic_level_count> mosaic_pages{};
+    /// The mosaics made again from the greyed atlas, a page for each of
+    /// the colour mosaic's chunks, in order, which the fog's masked greyed
+    /// pass draws; empty for a level whose greyed pages were not made, which
+    /// the greyed pass then draws tile by tile.
+    std::array<std::vector<card::PageHandle>, full_terrain::mosaic_level_count>
+        greyed_mosaic_pages{};
     uint64_t page_bytes{};     ///< texel bytes uploaded to the pages, greyed ones included
     uint64_t atlas_build_ns{}; ///< the time the atlases took to build
     uint64_t page_upload_ns{}; ///< the time the pages took to make and fill
@@ -355,6 +362,22 @@ struct Runtime::FullPresentation {
         card::Colour unmapped{}; ///< UI colour 0 through the display gamma
         card::Colour dither{};   ///< palette index 0 through the display gamma
     } fog;
+
+    /// The fog mask of the frame's grid (full_fog::build_unseen_mask), and
+    /// the page that holds it from its top-left texel, made larger than the
+    /// mask so that a grid that grows a little fits it still, and filled
+    /// again only when the mask's texels change.
+    full_fog::UnseenMask fog_mask;
+    card::PageHandle fog_mask_page{};
+    uint32_t fog_mask_page_width{};     ///< texels across; 0 for no page
+    uint32_t fog_mask_page_height{};    ///< texels down
+    full_fog::UnseenMask fog_mask_held; ///< what the page holds; empty when not filled
+    /// The greyed pass is drawn tile by tile at every zoom, as
+    /// --check-render-tiers asks to count the quads the mask spares.
+    bool fog_mask_off{};
+
+    /// Destroys the fog mask's page and forgets what it held.
+    void destroy_fog_mask() noexcept;
 
     // The overlay canvas: the key colour the world layer is cleared to
     // before the painters paint it, and the overlay of what they painted.

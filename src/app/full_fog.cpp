@@ -24,6 +24,9 @@ constexpr int32_t quarter_pixels = tile_pixels / 2;
 /// Half way across a fog tile, as a fraction of it: where a terrain tile's
 /// edge crosses it.
 constexpr float half_tile = 0.5F;
+/// Map pixels across half a fog tile: how far the fog mask's quad reaches
+/// past the grid's tiles, where the centres of its edge texels lie.
+constexpr int32_t half_tile_pixels = tile_pixels / 2;
 /// The alpha the dithered pass draws a corner out of sight at.
 constexpr float dither_alpha = 0.5F;
 /// Indices a quad adds.
@@ -483,6 +486,89 @@ uint32_t append_unseen_terrain(
         }
     }
     return quads;
+}
+
+void build_unseen_mask(const wr::FogGrid& grid, UnseenMask& mask) {
+    mask.texels.clear();
+    mask.any_unseen = false;
+    if (grid.tiles.empty() || grid.width <= 0 || grid.height <= 0) {
+        mask.width = 0;
+        mask.height = 0;
+        return;
+    }
+    // A cell for each tile corner, and the column and row that repeat the
+    // last.
+    const int32_t cells_across = grid.width + 1;
+    const int32_t cells_down = grid.height + 1;
+    mask.width = static_cast<uint32_t>(cells_across + 1);
+    mask.height = static_cast<uint32_t>(cells_down + 1);
+    mask.texels.assign(std::size_t{mask.width} * mask.height, card::Texel{});
+    const auto cell = [&](int32_t x, int32_t z) -> card::Texel& {
+        return mask.texels[static_cast<std::size_t>(z) * mask.width + static_cast<std::size_t>(x)];
+    };
+    // A cell is out of sight where any tile it is a corner of says so: a
+    // tile that straddles the map's edge carries the corners of the cells
+    // within onto those past it, and a tile wholly past the edge, which
+    // nothing draws, carries none (build_fog_grid).
+    constexpr card::Texel unseen{255, 255, 255, 255};
+    for (int32_t row = 0; row < grid.height; ++row)
+        for (int32_t column = 0; column < grid.width; ++column) {
+            const uint8_t corners = grid.at(column, row).unseen;
+            for (std::size_t corner = 0; corner < fog_tile_corners; ++corner)
+                if ((corners & corner_bits[corner]) != 0) {
+                    cell(
+                        column + static_cast<int32_t>(corner % 2),
+                        row + static_cast<int32_t>(corner / 2)
+                    ) = unseen;
+                    mask.any_unseen = true;
+                }
+        }
+    for (int32_t z = 0; z < cells_down; ++z)
+        cell(cells_across, z) = cell(cells_across - 1, z);
+    for (int32_t x = 0; x <= cells_across; ++x)
+        cell(x, cells_down) = cell(x, cells_down - 1);
+}
+
+uint32_t append_unseen_mask(
+    card::CardFrame& frame,
+    const wr::FogGrid& grid,
+    const UnseenMask& mask,
+    card::PageHandle page,
+    uint32_t page_width,
+    uint32_t page_height,
+    card::Blend blend,
+    const FogPlacement& placement,
+    card::TargetHandle target,
+    const card::Rect* scissor
+) {
+    if (grid.tiles.empty() || mask.width != static_cast<uint32_t>(grid.width) + 2U ||
+        mask.height != static_cast<uint32_t>(grid.height) + 2U || page_width < mask.width ||
+        page_height < mask.height)
+        return 0;
+    // Half a tile before the first tile's corner, so that the quad's
+    // texels are whole ones and each cell's centre lands on its corner.
+    const int32_t map_x = placement.camera_x + grid.offset_x - half_tile_pixels;
+    const int32_t map_z = placement.camera_z + grid.offset_z - half_tile_pixels;
+    const auto [x, wide] = placed_span(placement, true, map_x, (grid.width + 1) * tile_pixels);
+    const auto [y, high] = placed_span(placement, false, map_z, (grid.height + 1) * tile_pixels);
+    card::Batch* batch = nullptr;
+    card::PageHandle batch_page{};
+    open_batch(frame, batch, batch_page, page, 0, card::Sampling::linear, target, scissor);
+    batch->blend = blend;
+    card::append_quad(
+        frame,
+        x,
+        y,
+        wide,
+        high,
+        0.0F,
+        0.0F,
+        static_cast<float>(grid.width + 1) / static_cast<float>(page_width),
+        static_cast<float>(grid.height + 1) / static_cast<float>(page_height),
+        card::Colour{}
+    );
+    batch->index_count += quad_indices;
+    return 1;
 }
 
 uint32_t append_unseen_dither(

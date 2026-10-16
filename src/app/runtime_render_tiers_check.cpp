@@ -228,6 +228,12 @@ constexpr std::size_t least_fog_pixels = 2048;
 /// Most a channel the card blended may differ from the blend computed
 /// exactly: the renderer rounds each blend its own way.
 constexpr int most_blend_rounding = 2;
+/// Most a channel of the greyed fog by its mask may differ from the greyed
+/// terrain, or lie past the range from the colour to it: the mask rounds
+/// through four blends (the colour darkened, the levels added, the sum
+/// scaled, the resolve) where the terrain drawn alone rounds through one a
+/// level.
+constexpr int most_mask_rounding = 4;
 /// Pixels a sprite's rectangle is grown by each side in the mask of what
 /// the card draws its own way, for the card's placing between pixels.
 constexpr int sprite_mask_margin = 1;
@@ -1014,9 +1020,9 @@ int Runtime::check_render_tiers() {
               << counts.prescale_draws - draws_before_loading << " frames by the card's filter\n";
     // The loading screen opened the executor, ran the Full function test
     // and built and uploaded the terrain pages with the terrain, and the
-    // zoomed-out levels' mosaics, before the world was built, letting the
-    // atlas's texels go once uploaded; the first match frame draws from
-    // those pages and makes none.
+    // zoomed-out levels' mosaics and their greyed mosaics, before the world
+    // was built, letting the atlas's texels go once uploaded; the first
+    // match frame draws from those pages and makes none.
     if (asked_level == HardwareAcceleration::full) {
         if (!full_presentation() || !full_ || render_run_->tier.tier != policy::RenderTier::full)
             fail("the full tier was not on as the match loaded");
@@ -1028,11 +1034,13 @@ int Runtime::check_render_tiers() {
         std::size_t mosaic_pages = 0;
         for (const auto& pages : full.mosaic_pages)
             mosaic_pages += pages.size();
+        for (const auto& pages : full.greyed_mosaic_pages)
+            mosaic_pages += pages.size();
         if (full.greyed_pages.size() != full.pages.size() ||
             pages_alive != full.pages.size() + full.greyed_pages.size() + mosaic_pages)
             fail(
                 "the terrain pages alive are not the loading screen's, their greyed pages and "
-                "the mosaics' pages"
+                "the mosaics' pages, colour and greyed"
             );
         for (const auto& page : full.atlas.pages)
             if (!page.texels.empty())
@@ -3379,9 +3387,12 @@ void Runtime::check_full_render_tier(
             if (full.moved_target == card::TargetHandle{} ||
                 full.moved_frame.batches.size() != (shifted_apart ? 2U : 1U))
                 fail("a frame at zoom " + zoom_text(zoom) + " was not drawn into the moved target");
-            // Every draw of the battlefield goes into the moved target.
+            // Every draw of the battlefield goes into the moved target, or
+            // into the shifted target for the fog's greyed picture, which is
+            // resolved into the moved target.
             for (const auto& batch : full.frame.batches)
-                if (batch.target != full.moved_target)
+                if (batch.target != full.moved_target &&
+                    (!shifted_apart || batch.target != full.shifted_target))
                     fail(
                         "a draw of the battlefield at zoom " + zoom_text(zoom) +
                         " went past the moved target"
@@ -4856,6 +4867,141 @@ void Runtime::check_full_overlays(
                   << dithered_differing << " not the even tone\n";
         if ((whole_in_view && dithered < least_fog_pixels) || dithered_differing != 0)
             fail("the dithered fog at zoom " + zoom_text(zoom) + " is not the even tone");
+    }
+    // At a quarter and at the floor, where every level drawn comes from its
+    // mosaic, one level at a quarter and two at the floor: the greyed pass
+    // by the fog mask, in fewer quads than tile by tile, shows the frame
+    // with the fog off under no tile out of sight, the same frame drawn
+    // from the greyed mosaics under a tile wholly out of sight, and between
+    // the two under a tile at an edge, a pixel where tiles of two states
+    // meet held to the range alone; the objects passed over as elsewhere,
+    // and every sprite.
+    for (const float zoom : {0.25F, kMinFullBattlefieldZoom}) {
+        at_zoom(zoom);
+        set_fog(false, false, false);
+        const auto clear_frame = full_frame();
+        std::swap(full_->mosaic_pages, full_->greyed_mosaic_pages);
+        const auto greyed_frame = full_frame();
+        std::swap(full_->mosaic_pages, full_->greyed_mosaic_pages);
+        set_fog(true, false, false);
+        full_->fog_mask_off = true;
+        full_frame();
+        const uint32_t tiled_quads = full_->drawn_fog_quads;
+        full_->fog_mask_off = false;
+        const auto masked = full_frame();
+        const uint32_t masked_quads = full_->drawn_fog_quads;
+        auto objects = object_mask(zoom, masked);
+        const Area field = battlefield();
+        const Area pointer = cursor();
+        const auto width = static_cast<int>(masked.width);
+        const auto height = static_cast<int>(masked.height);
+        // Every sprite too: the sprite stage greys one whole under a tile
+        // out of sight, where the frames with the fog off show it in colour.
+        {
+            const auto& list = match_models().draws;
+            for (const auto& draw : list.draws) {
+                if (draw.kind != WorldDrawKind::sprite &&
+                    draw.kind != WorldDrawKind::blended_sprite &&
+                    draw.kind != WorldDrawKind::lit_sprite)
+                    continue;
+                const auto& sprite = list.sprites[draw.index];
+                if (sprite.frame == nullptr)
+                    continue;
+                const SceneRect rect = sprite_scene_rect(sprite, zoom);
+                mark_rect(
+                    objects,
+                    masked.width,
+                    masked.height,
+                    field.x + static_cast<int>(rect.left),
+                    field.y + static_cast<int>(rect.top),
+                    std::max(1, static_cast<int>(rect.right - rect.left)),
+                    std::max(1, static_cast<int>(rect.bottom - rect.top)),
+                    sprite_mask_margin
+                );
+            }
+        }
+        std::vector<uint8_t> states(masked.rgb.size() / 3U, static_cast<uint8_t>(TileState::clear));
+        const auto state_at = [&](int x, int y) -> uint8_t& {
+            return states[static_cast<std::size_t>(y) * masked.width + static_cast<std::size_t>(x)];
+        };
+        for (const auto& tile : fog_tiles(zoom)) {
+            if (tile.tile.unseen == 0)
+                continue;
+            const auto state =
+                tile.tile.unseen == wr::fog_mask_full ? TileState::unseen : TileState::edge;
+            for (int y = std::max(tile.area.y, 0); y < std::min(tile.area.y + tile.area.h, height);
+                 ++y)
+                for (int x = std::max(tile.area.x, 0);
+                     x < std::min(tile.area.x + tile.area.w, width);
+                     ++x)
+                    if (state_at(x, y) != static_cast<uint8_t>(TileState::edge))
+                        state_at(x, y) = static_cast<uint8_t>(state);
+        }
+        std::size_t clear = 0;
+        std::size_t clear_differing = 0;
+        std::size_t interior = 0;
+        std::size_t interior_differing = 0;
+        std::size_t edge = 0;
+        std::size_t edge_outside = 0;
+        for (int y = field.y + 1; y + 1 < field.y + field.h; ++y)
+            for (int x = field.x + 1; x + 1 < field.x + field.w; ++x) {
+                const auto at =
+                    static_cast<std::size_t>(y) * masked.width + static_cast<std::size_t>(x);
+                if (inside(pointer, x, y) || objects[at] != 0)
+                    continue;
+                // A pixel among tiles of more than one state is an edge's.
+                uint8_t state = state_at(x, y);
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        if (state_at(x + dx, y + dy) != state_at(x, y))
+                            state = static_cast<uint8_t>(TileState::edge);
+                const uint8_t* by_mask = pixel(masked, x, y);
+                const uint8_t* fog_off = pixel(clear_frame, x, y);
+                const uint8_t* grey = pixel(greyed_frame, x, y);
+                const auto near_to = [&](const uint8_t* wanted, int rounding) {
+                    for (std::size_t channel = 0; channel < 3; ++channel)
+                        if (std::abs(by_mask[channel] - wanted[channel]) > rounding)
+                            return false;
+                    return true;
+                };
+                if (state == static_cast<uint8_t>(TileState::clear)) {
+                    ++clear;
+                    if (!near_to(fog_off, most_blend_rounding))
+                        ++clear_differing;
+                } else if (state == static_cast<uint8_t>(TileState::unseen)) {
+                    ++interior;
+                    if (!near_to(grey, most_mask_rounding))
+                        ++interior_differing;
+                } else {
+                    ++edge;
+                    for (std::size_t channel = 0; channel < 3; ++channel) {
+                        const int low = std::min<int>(fog_off[channel], grey[channel]);
+                        const int high = std::max<int>(fog_off[channel], grey[channel]);
+                        if (by_mask[channel] < low - most_mask_rounding ||
+                            by_mask[channel] > high + most_mask_rounding) {
+                            ++edge_outside;
+                            break;
+                        }
+                    }
+                }
+            }
+        std::cout << "render tiers check: full tier fog by its mask at zoom " << zoom_text(zoom)
+                  << ": " << masked_quads << " quads where the tiles take " << tiled_quads << "; "
+                  << interior << " pixels under tiles wholly out of sight, " << interior_differing
+                  << " not the greyed mosaics'; " << edge << " under edge tiles, " << edge_outside
+                  << " outside the colour-to-grey range; " << clear << " under no tile, "
+                  << clear_differing << " not the fog-off frame's\n";
+        if (interior < least_fog_pixels || interior_differing != 0 || edge == 0 ||
+            edge_outside != 0 || clear_differing != 0 || masked_quads == 0 ||
+            masked_quads >= tiled_quads) {
+            write_png(picture("fog-unseen-zoom-" + zoom_text(zoom) + "-masked"), masked);
+            write_png(picture("fog-greyed-zoom-" + zoom_text(zoom)), greyed_frame);
+            write_png(picture("fog-off-zoom-" + zoom_text(zoom)), clear_frame);
+            fail(
+                "the greyed fog by its mask at zoom " + zoom_text(zoom) +
+                " strays from the colour and greyed terrain"
+            );
+        }
     }
     // At the zoom floor, a sixth, where the processor draws no picture to
     // hold the card's to and a fog tile spans a fraction of a pixel or a
