@@ -331,10 +331,124 @@ void test_tiles() {
     );
 }
 
+/// A mosaic's chunks: one for a picture within the limit; past it, drawn
+/// parts that follow one another across the whole picture, each texture
+/// within the limit and holding one texel of each neighbour; none for a
+/// level without a mosaic, a limit too small or an empty grid.
+void test_mosaic_plan() {
+    const ft::MosaicLevel whole = ft::plan_mosaic_level(3, 2, 1, 4096);
+    OA_CHECK(whole.level == 1 && whole.width == 48 && whole.height == 32);
+    OA_CHECK(whole.chunks.size() == 1);
+    if (whole.chunks.size() == 1) {
+        const ft::MosaicChunk& chunk = whole.chunks[0];
+        OA_CHECK(chunk.x == 0 && chunk.y == 0 && chunk.width == 48 && chunk.height == 32);
+        OA_CHECK(chunk.drawn_x == 0 && chunk.drawn_width == 48 && chunk.drawn_height == 32);
+    }
+    // Ten tiles at level 1 are 160 texels across: at most 64 a chunk, each
+    // drawing 62 where it meets another.
+    const ft::MosaicLevel cut = ft::plan_mosaic_level(10, 1, 1, 64);
+    OA_CHECK(cut.width == 160 && cut.height == 16 && cut.chunks.size() == 3);
+    uint32_t next = 0;
+    for (std::size_t index = 0; index < cut.chunks.size(); ++index) {
+        const ft::MosaicChunk& chunk = cut.chunks[index];
+        OA_CHECK(chunk.width <= 64 && chunk.height == 16);
+        OA_CHECK(chunk.drawn_x == next);
+        OA_CHECK(chunk.x == (index == 0 ? 0U : chunk.drawn_x - 1U));
+        const bool last = index + 1 == cut.chunks.size();
+        OA_CHECK(chunk.x + chunk.width == chunk.drawn_x + chunk.drawn_width + (last ? 0U : 1U));
+        next = chunk.drawn_x + chunk.drawn_width;
+    }
+    OA_CHECK(next == cut.width);
+    // Level 2's tiles are 8 texels a side.
+    const ft::MosaicLevel quarter = ft::plan_mosaic_level(3, 2, 2, 4096);
+    OA_CHECK(quarter.width == 24 && quarter.height == 16 && quarter.chunks.size() == 1);
+    OA_CHECK(ft::plan_mosaic_level(3, 2, 0, 4096).chunks.empty());
+    OA_CHECK(ft::plan_mosaic_level(3, 2, 3, 4096).chunks.empty());
+    OA_CHECK(ft::plan_mosaic_level(3, 2, 1, 2).chunks.empty());
+    OA_CHECK(ft::plan_mosaic_level(0, 2, 1, 4096).chunks.empty());
+}
+
+/// A pass from a mosaic: one quad a chunk the view shows, at the chunk's
+/// drawn part, reading the chunk's texels of that part, one batch a chunk
+/// on its page with the pass's sampling, blend and alpha; clipped to the
+/// view; nothing for another level's pass or too few pages.
+void test_mosaic_quads() {
+    const ft::MosaicLevel mosaic = ft::plan_mosaic_level(10, 1, 1, 64);
+    const std::vector<card::PageHandle> pages{{1}, {2}, {3}};
+    ft::TerrainView view;
+    view.scale = 0.25F;
+    view.width = 80;
+    view.height = 8;
+    const ft::TerrainPass pass{1, card::Sampling::linear, card::Blend::alpha, 0.5F};
+    card::CardFrame frame;
+    OA_CHECK(
+        ft::append_terrain_mosaic(
+            frame, mosaic, pages, view, pass, card::TargetHandle{}, nullptr
+        ) == 3
+    );
+    OA_CHECK(
+        frame.batches.size() == 3 && frame.vertices.size() == 12 && frame.indices.size() == 18
+    );
+    OA_CHECK(card::check_frame(frame).empty());
+    // The chunks' drawn parts end at map pixels 124, 248 and 320, a
+    // quarter of that in the window.
+    const float ends[] = {31.0F, 62.0F, 80.0F};
+    for (std::size_t index = 0; index < frame.batches.size() && index < 3; ++index) {
+        const card::Batch& batch = frame.batches[index];
+        OA_CHECK(batch.page == pages[index] && batch.level == 0);
+        OA_CHECK(batch.sampling == card::Sampling::linear && batch.blend == card::Blend::alpha);
+        OA_CHECK(batch.index_count == 6);
+        const card::Vertex& corner = frame.vertices[index * 4 + 2];
+        OA_CHECK(near(corner.x, ends[index]) && near(corner.y, 8.0F));
+        OA_CHECK(near(corner.colour.alpha, 0.5F));
+    }
+    // The first chunk's texture starts at the picture's first texel: its
+    // drawn part reads from 0 to 62 of its 63 texels.
+    OA_CHECK(near(frame.vertices[0].u, 0.0F) && near(frame.vertices[2].u, 62.0F / 63.0F));
+    // The second's starts a texel before its drawn part.
+    const ft::MosaicChunk& second = mosaic.chunks[1];
+    OA_CHECK(near(frame.vertices[4].u, 1.0F / static_cast<float>(second.width)));
+
+    // A view from map pixel 100, 20 pixels wide, shows the first chunk from
+    // 100 and the second to 180.
+    ft::TerrainView part = view;
+    part.camera_x = 100;
+    part.width = 20;
+    card::CardFrame clipped;
+    OA_CHECK(
+        ft::append_terrain_mosaic(
+            clipped, mosaic, pages, part, pass, card::TargetHandle{}, nullptr
+        ) == 2
+    );
+    OA_CHECK(clipped.vertices.size() == 8);
+    if (clipped.vertices.size() == 8) {
+        OA_CHECK(near(clipped.vertices[0].x, 0.0F) && near(clipped.vertices[2].x, 6.0F));
+        OA_CHECK(near(clipped.vertices[6].x, 20.0F) || near(clipped.vertices[5].x, 20.0F));
+        OA_CHECK(near(clipped.vertices[0].u, 50.0F / 63.0F));
+    }
+
+    card::CardFrame refused;
+    const ft::TerrainPass other{2, card::Sampling::linear, card::Blend::none, 1.0F};
+    OA_CHECK(
+        ft::append_terrain_mosaic(
+            refused, mosaic, pages, view, other, card::TargetHandle{}, nullptr
+        ) == 0
+    );
+    const std::vector<card::PageHandle> short_pages{{1}};
+    OA_CHECK(
+        ft::append_terrain_mosaic(
+            refused, mosaic, short_pages, view, pass, card::TargetHandle{}, nullptr
+        ) == 0
+    );
+    OA_CHECK(refused.batches.empty() && refused.vertices.empty());
+}
+
 } // namespace
 
 int main() {
     test_plan();
     test_tiles();
+    test_mosaic_plan();
+    test_mosaic_quads();
     return oa::test::check_exit_status();
 }

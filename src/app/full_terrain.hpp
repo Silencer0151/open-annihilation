@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace oa::app::full_terrain {
 
@@ -133,6 +134,81 @@ visible_tiles(const oa::present::gpu_world::TerrainAtlas& atlas, const TerrainVi
 uint32_t append_terrain_tiles(
     card::CardFrame& frame,
     const oa::present::gpu_world::TerrainAtlas& atlas,
+    std::span<const card::PageHandle> pages,
+    const TerrainView& view,
+    const TerrainPass& pass,
+    card::TargetHandle target,
+    const card::Rect* scissor
+);
+
+/// The first atlas level a mosaic holds: the zoomed-out levels, 1 and 2,
+/// are each drawn from the whole map's picture at that level rather than
+/// tile by tile.
+inline constexpr uint8_t first_mosaic_level = 1;
+/// Levels that have a mosaic: from first_mosaic_level to the last tile level.
+inline constexpr uint32_t mosaic_level_count =
+    oa::present::gpu_world::tile_level_count - first_mosaic_level;
+
+/// One chunk of a level's mosaic: a texture holding a part of the whole
+/// map's picture at the level, and the part of it the chunk draws. Where a
+/// chunk meets another, its texture holds one texel of its neighbour's
+/// beyond the part it draws, so that a LINEAR draw reads across the seam as
+/// across any texel; at the map's edges it holds nothing beyond, and the
+/// card's clamped addressing repeats the edge texel there, as a tile's
+/// gutter does.
+struct MosaicChunk {
+    uint32_t x{};            ///< the texture's first texel across, in texels of the level's picture
+    uint32_t y{};            ///< the texture's first texel down
+    uint32_t width{};        ///< texels across the texture
+    uint32_t height{};       ///< texels down the texture
+    uint32_t drawn_x{};      ///< the first texel the chunk draws across, in the picture's texels
+    uint32_t drawn_y{};      ///< the first texel the chunk draws down
+    uint32_t drawn_width{};  ///< texels across the part the chunk draws
+    uint32_t drawn_height{}; ///< texels down the part the chunk draws
+};
+
+/// A level's mosaic: the whole map's picture at the level, cut into chunks
+/// no wider or taller than a limit, row by row.
+struct MosaicLevel {
+    uint8_t level{};   ///< the atlas level, first_mosaic_level or past it
+    uint32_t width{};  ///< texels across the whole picture
+    uint32_t height{}; ///< texels down the whole picture
+    std::vector<MosaicChunk> chunks;
+};
+
+/// Plans a level's mosaic for a grid of tiles: the picture is the grid's
+/// tiles at the level, tile_edge texels each halved once per level, and it
+/// is cut into as few chunks as fit `chunk_limit` texels a side, each
+/// chunk's drawn part one less than the limit on a side that meets another.
+///
+/// @param grid_width tile columns
+/// @param grid_height tile rows
+/// @param level the atlas level, from first_mosaic_level to the last tile level
+/// @param chunk_limit the most texels a chunk's texture may span a side, at least 3
+/// @return the plan; no chunks for an empty grid, a level outside the
+///         mosaic levels or a limit below 3
+[[nodiscard]] MosaicLevel
+plan_mosaic_level(uint32_t grid_width, uint32_t grid_height, uint8_t level, uint32_t chunk_limit);
+
+/// Appends a pass of a view's terrain from a level's mosaic: for each chunk
+/// whose drawn part the view shows, one quad of that part, clipped to the
+/// view, textured by the chunk's texels at the pass's sampling, blend and
+/// alpha, one batch a chunk. The view's tiles cost the card as many quads
+/// as it shows chunks, whatever the zoom. Ground past the map's edges is
+/// not drawn, as append_terrain_tiles leaves it.
+///
+/// @param[in,out] frame the frame
+/// @param mosaic the level's mosaic, its level the pass's
+/// @param pages the executor's page for each chunk, in order
+/// @param view the view
+/// @param pass the level, sampling, blend and alpha
+/// @param target the target the quads are drawn into; none for the window
+/// @param scissor the pixels of the target the draw may write; null for all
+/// @return quads appended; 0 where the pass's level is not the mosaic's or
+///         a chunk has no page
+uint32_t append_terrain_mosaic(
+    card::CardFrame& frame,
+    const MosaicLevel& mosaic,
     std::span<const card::PageHandle> pages,
     const TerrainView& view,
     const TerrainPass& pass,

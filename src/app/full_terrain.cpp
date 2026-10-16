@@ -209,4 +209,157 @@ uint32_t append_terrain_tiles(
     return quads;
 }
 
+namespace {
+
+/// The least texels a side a mosaic chunk may span: a texel it draws and
+/// one of each neighbour's.
+constexpr uint32_t least_chunk_limit = 3;
+
+/// One axis of a chunk: its texture's texels and the part of them drawn.
+struct ChunkSpan {
+    uint32_t start{};
+    uint32_t size{};
+    uint32_t drawn_start{};
+    uint32_t drawn_size{};
+};
+
+/// Cuts one axis of a picture into spans of at most `limit` texels, each
+/// drawn part followed by the next, with one texel of each neighbour held
+/// beyond a drawn part that meets one.
+///
+/// @param total texels along the axis, above 0
+/// @param limit the most texels a span may hold, at least least_chunk_limit
+/// @return the spans, in order
+std::vector<ChunkSpan> cut_axis(uint32_t total, uint32_t limit) {
+    if (total <= limit)
+        return {{0, total, 0, total}};
+    std::vector<ChunkSpan> spans;
+    const uint32_t stride = limit - 2U;
+    for (uint32_t drawn = 0; drawn < total; drawn += stride) {
+        const uint32_t end = std::min(total, drawn + stride);
+        const uint32_t start = drawn == 0 ? 0U : drawn - 1U;
+        const uint32_t stop = end == total ? total : end + 1U;
+        spans.push_back({start, stop - start, drawn, end - drawn});
+    }
+    return spans;
+}
+
+} // namespace
+
+MosaicLevel
+plan_mosaic_level(uint32_t grid_width, uint32_t grid_height, uint8_t level, uint32_t chunk_limit) {
+    MosaicLevel mosaic;
+    mosaic.level = level;
+    if (grid_width == 0 || grid_height == 0 || level < first_mosaic_level ||
+        level >= gw::tile_level_count || chunk_limit < least_chunk_limit)
+        return mosaic;
+    const uint32_t tile_texels = gw::tile_edge >> level;
+    mosaic.width = grid_width * tile_texels;
+    mosaic.height = grid_height * tile_texels;
+    const std::vector<ChunkSpan> columns = cut_axis(mosaic.width, chunk_limit);
+    const std::vector<ChunkSpan> rows = cut_axis(mosaic.height, chunk_limit);
+    mosaic.chunks.reserve(columns.size() * rows.size());
+    for (const ChunkSpan& row : rows)
+        for (const ChunkSpan& column : columns)
+            mosaic.chunks.push_back(
+                {column.start,
+                 row.start,
+                 column.size,
+                 row.size,
+                 column.drawn_start,
+                 row.drawn_start,
+                 column.drawn_size,
+                 row.drawn_size}
+            );
+    return mosaic;
+}
+
+uint32_t append_terrain_mosaic(
+    card::CardFrame& frame,
+    const MosaicLevel& mosaic,
+    std::span<const card::PageHandle> pages,
+    const TerrainView& view,
+    const TerrainPass& pass,
+    card::TargetHandle target,
+    const card::Rect* scissor
+) {
+    if (pass.level != mosaic.level || pages.size() < mosaic.chunks.size() || !(view.scale > 0.0F))
+        return 0;
+    const double scale = view.scale;
+    // Map pixels a texel of the level spans.
+    const double texel_pixels = static_cast<double>(1U << mosaic.level);
+    // The map pixels the view shows, its margin before the camera included.
+    const double view_left = view.camera_x - static_cast<double>(view.margin) / scale;
+    const double view_top = view.camera_y - static_cast<double>(view.margin) / scale;
+    const double view_right = view.camera_x + static_cast<double>(view.width) / scale;
+    const double view_bottom = view.camera_y + static_cast<double>(view.height) / scale;
+    // Where a map pixel lands in the target, and, on whole pixels, rounded
+    // to the nearest, so that chunks meeting at a map pixel meet there.
+    const auto land = [&](double map_pixel, float origin, int32_t camera) {
+        const auto at = static_cast<float>(origin + (map_pixel - camera) * scale);
+        return view.whole_pixels ? std::round(at) : at;
+    };
+    const card::Colour colour{1.0F, 1.0F, 1.0F, pass.alpha};
+    uint32_t quads = 0;
+    for (std::size_t index = 0; index < mosaic.chunks.size(); ++index) {
+        const MosaicChunk& chunk = mosaic.chunks[index];
+        const double left = std::max(view_left, static_cast<double>(chunk.drawn_x) * texel_pixels);
+        const double top = std::max(view_top, static_cast<double>(chunk.drawn_y) * texel_pixels);
+        const double right = std::min(
+            view_right, static_cast<double>(chunk.drawn_x + chunk.drawn_width) * texel_pixels
+        );
+        const double bottom = std::min(
+            view_bottom, static_cast<double>(chunk.drawn_y + chunk.drawn_height) * texel_pixels
+        );
+        if (!(left < right) || !(top < bottom))
+            continue;
+        const float x0 = land(left, view.origin_x, view.camera_x);
+        const float y0 = land(top, view.origin_y, view.camera_y);
+        const float x1 = land(right, view.origin_x, view.camera_x);
+        const float y1 = land(bottom, view.origin_y, view.camera_y);
+        if (!(x0 < x1) || !(y0 < y1))
+            continue;
+        // The chunk's texture coordinate of a map pixel.
+        const auto u_of = [&](double map_pixel) {
+            return static_cast<float>(
+                (map_pixel / texel_pixels - static_cast<double>(chunk.x)) /
+                static_cast<double>(chunk.width)
+            );
+        };
+        const auto v_of = [&](double map_pixel) {
+            return static_cast<float>(
+                (map_pixel / texel_pixels - static_cast<double>(chunk.y)) /
+                static_cast<double>(chunk.height)
+            );
+        };
+        card::Batch batch;
+        batch.operation = card::Operation::draw;
+        batch.target = target;
+        batch.page = pages[index];
+        batch.level = 0;
+        batch.blend = pass.blend;
+        batch.sampling = pass.sampling;
+        batch.scissored = scissor != nullptr;
+        if (scissor != nullptr)
+            batch.scissor = *scissor;
+        batch.first_index = static_cast<card::Index>(frame.indices.size());
+        batch.index_count = quad_indices;
+        card::append_quad(
+            frame,
+            x0,
+            y0,
+            x1 - x0,
+            y1 - y0,
+            u_of(left),
+            v_of(top),
+            u_of(right),
+            v_of(bottom),
+            colour
+        );
+        frame.batches.push_back(batch);
+        ++quads;
+    }
+    return quads;
+}
+
 } // namespace oa::app::full_terrain
