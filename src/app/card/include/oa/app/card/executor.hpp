@@ -38,6 +38,11 @@ struct PageDescription {
     uint8_t level_count{1}; ///< levels, 1 to most_page_levels
 };
 
+/// The texel bytes the pages may be written with, since the last frame
+/// ran or the renderer was last flushed, before the executor flushes the
+/// renderer (Executor::update_page).
+inline constexpr uint64_t most_unflushed_update_bytes = uint64_t{64} << 20U;
+
 /// What the executor could arrange on its renderer.
 struct Capabilities {
     /// Darken runs as a blend mode composed for the renderer, which reads
@@ -75,6 +80,9 @@ struct Counts {
     uint64_t resolves{};         ///< resolve batches run
     uint64_t blend_reductions{}; ///< blend_reduce batches run
     uint64_t halvings{};         ///< render targets halved into their half
+    /// Flushes of the renderer after the pages' writes reached
+    /// most_unflushed_update_bytes.
+    uint64_t update_flushes{};
     uint64_t pages_alive{};
     uint64_t targets_alive{};
     uint64_t texture_bytes{}; ///< bytes of every page level and render target alive
@@ -133,6 +141,13 @@ class Executor {
     [[nodiscard]] PageHandle create_page(const PageDescription& description);
 
     /// Writes texels into a level of a page, the whole level or a part of it.
+    /// Once the texels written since the last frame ran, or since the
+    /// renderer was last flushed, reach most_unflushed_update_bytes, the
+    /// renderer is flushed: SDL's Vulkan renderer stages each write in a
+    /// buffer of its own and lets the buffers go only when it next hands
+    /// its work to the card, so that the writes of a match's loading, with
+    /// no frame between them, would otherwise hold every buffer at once and
+    /// can run out of the memory the buffers are made in.
     ///
     /// @param page the page
     /// @param level the level written
@@ -515,6 +530,9 @@ class Executor {
     std::vector<Target> targets_{};
     std::vector<std::size_t> free_targets_{};
     std::vector<Vertex> scratch_{}; ///< the darken fallback's copy of a batch's vertices
+    /// Texel bytes written to the pages since the last frame ran or the
+    /// renderer was last flushed.
+    uint64_t unflushed_update_bytes_{};
 };
 
 } // namespace oa::app::card

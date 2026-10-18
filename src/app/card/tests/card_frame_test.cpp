@@ -2005,6 +2005,42 @@ void test_a_retired_page_lasts_its_frame() {
     OA_CHECK(fixture.executor.counts().pages_alive == 0);
 }
 
+/// The pages' writes flush the renderer each time they reach
+/// most_unflushed_update_bytes, counted from the last flush or the last
+/// frame, and the page holds the last write.
+void test_large_writes_flush_the_renderer() {
+    Fixture fixture;
+    constexpr uint32_t edge = 1024;
+    constexpr uint64_t write_bytes = uint64_t{edge} * edge * card::texel_bytes;
+    constexpr uint64_t writes_to_flush = card::most_unflushed_update_bytes / write_bytes;
+    static_assert(card::most_unflushed_update_bytes % write_bytes == 0 && writes_to_flush > 2);
+    const Image texels = seeded(seed_page, edge, edge);
+    const card::PageHandle page = fixture.make_page({texels});
+    const auto bytes = texels.bytes();
+    const auto write = [&]() {
+        OA_CHECK(fixture.executor.update_page(page, 0, nullptr, bytes.data(), texels.pitch()));
+    };
+    const auto flushes = [&]() { return fixture.executor.counts().update_flushes; };
+    // The page's fill is the first write toward the first flush.
+    for (uint64_t at = 2; at < writes_to_flush; ++at)
+        write();
+    OA_CHECK(flushes() == 0);
+    write();
+    OA_CHECK(flushes() == 1);
+    // A frame between writes starts the count again.
+    for (uint64_t at = 0; at + 1 < writes_to_flush; ++at)
+        write();
+    card::CardFrame frame;
+    card::append_quad(frame, 0.0F, 0.0F, 16.0F, 16.0F, 0.0F, 0.0F, 1.0F, 1.0F, {});
+    draw_since(frame, 0, page, card::Blend::none);
+    fixture.run("a frame between the pages' writes", frame, true);
+    for (uint64_t at = 0; at + 1 < writes_to_flush; ++at)
+        write();
+    OA_CHECK(flushes() == 1);
+    write();
+    OA_CHECK(flushes() == 2);
+}
+
 /// A frame of more than a million vertices, as a battle of thousands of
 /// units at the widest zoom builds, runs whole.
 void test_a_frame_of_many_vertices_runs() {
@@ -2352,6 +2388,7 @@ int main() {
     test_levels_of_a_page();
     test_malformed_frames_are_refused();
     test_a_retired_page_lasts_its_frame();
+    test_large_writes_flush_the_renderer();
     test_a_frame_of_many_vertices_runs();
     test_pages_beyond_the_limit_are_refused();
     test_batches_that_share_their_state_merge();

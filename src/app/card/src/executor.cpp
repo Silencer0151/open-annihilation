@@ -137,6 +137,7 @@ bool Executor::open(SDL_Renderer* renderer, uint32_t texture_limit) {
     renderer_ = renderer;
     capabilities_ = {};
     counts_ = {};
+    unflushed_update_bytes_ = 0;
     capabilities_.texture_limit = texture_limit;
     const char* name = SDL_GetRendererName(renderer);
     page_access_ = name != nullptr && std::string_view(name) == software_renderer_name
@@ -354,6 +355,13 @@ bool Executor::update_page(
     const SDL_Rect rect{written.x, written.y, written.width, written.height};
     if (!SDL_UpdateTexture(found.texture, &rect, texels, static_cast<int>(pitch)))
         return fail("SDL_UpdateTexture of page level " + std::to_string(level));
+    unflushed_update_bytes_ += row_bytes * static_cast<uint64_t>(written.height);
+    if (unflushed_update_bytes_ >= most_unflushed_update_bytes) {
+        if (!SDL_FlushRenderer(renderer_))
+            return fail("SDL_FlushRenderer after the pages' writes");
+        unflushed_update_bytes_ = 0;
+        ++counts_.update_flushes;
+    }
     return true;
 }
 
@@ -1030,6 +1038,8 @@ bool Executor::run_frame(const CardFrame& frame, SDL_Texture* final_target) {
     frame_refused_ = false;
     if (!is_open())
         return refuse("the executor is not open");
+    // The writes before the last frame went to the card with it.
+    unflushed_update_bytes_ = 0;
     std::string fault = check_frame(frame);
     if (fault.empty())
         fault = check_handles(frame, final_target);
