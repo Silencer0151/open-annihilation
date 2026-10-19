@@ -3561,7 +3561,8 @@ void Runtime::check_full_render_tier(
     // the reference of the level-0 view enlarged that many times and drawn
     // as the renderer draws a texture LINEAR, within the renderer's
     // tolerance. A renderer with the pixel-art sampling mode draws straight,
-    // held to that filter's reference.
+    // held to that filter's reference drawn as the card draws it, each tile
+    // alone and clamped at its edges.
     {
         const float zoom = 1.37F;
         set_level(HardwareAcceleration::full);
@@ -3626,29 +3627,76 @@ void Runtime::check_full_render_tier(
                 );
             how = "through the target at " + std::to_string(factor);
         } else if (plan.passes[0].sampling == card::Sampling::pixel_art) {
-            const auto view_w = static_cast<uint32_t>(std::ceil(field.w / zoom));
-            const auto view_h = static_cast<uint32_t>(std::ceil(field.h / zoom));
-            std::vector<uint8_t> rgba(std::size_t{view_w} * view_h * 4U);
-            if (gw::read_terrain_view(
-                    reference_atlas,
+            // The card draws each tile by itself, from its own texels and
+            // the gutter that repeats its edge, so the reference draws each
+            // tile alone too, clamped at its edges, into the pixels whose
+            // centres the tile's quad covers; past the map, the clear's
+            // black.
+            for (int y = field.y; y < field.y + field.h; ++y)
+                std::memset(
+                    reference.rgb.data() + (static_cast<std::size_t>(y) * reference.width +
+                                            static_cast<std::size_t>(field.x)) *
+                                               3U,
                     0,
-                    cam_x,
-                    cam_y,
-                    view_w,
-                    view_h,
-                    rgba.data(),
-                    std::size_t{view_w} * 4U
-                ) != gw::TerrainAtlasError::none)
-                fail("the atlas refused the level-0 view at zoom " + zoom_text(zoom));
-            std::vector<uint8_t> rgb(std::size_t{view_w} * view_h * 3U);
-            for (std::size_t i = 0; i < std::size_t{view_w} * view_h; ++i)
-                std::memcpy(&rgb[i * 3U], &rgba[i * 4U], 3);
-            wr::pixelart_rgb24(
-                {rgb.data(), view_w, view_h, view_w},
-                {zoom, zoom, static_cast<double>(field.x), static_cast<double>(field.y)},
-                {reference.rgb.data(), reference.width, reference.height, reference.width}
+                    static_cast<std::size_t>(field.w) * 3U
+                );
+            constexpr auto tile = static_cast<int32_t>(gw::tile_edge);
+            const auto first_tile = [](int32_t pixel) {
+                return pixel >= 0 ? pixel / tile : -((-pixel + tile - 1) / tile);
+            };
+            // The pixels whose centres a tile's span covers along one axis,
+            // within the battlefield.
+            const auto covered = [](double start, double span, int lowest, int end) {
+                const int first = std::max(lowest, static_cast<int>(std::ceil(start - 0.5)));
+                const int last = std::min(end, static_cast<int>(std::ceil(start + span - 0.5)));
+                return std::pair{first, last};
+            };
+            const double span = static_cast<double>(tile) * zoom;
+            std::vector<uint8_t> rgba(std::size_t{gw::tile_edge} * gw::tile_edge * 4U);
+            std::vector<uint8_t> rgb(std::size_t{gw::tile_edge} * gw::tile_edge * 3U);
+            const int32_t end_column = std::min(
+                static_cast<int32_t>(reference_atlas.grid_width),
+                first_tile(cam_x + static_cast<int32_t>(std::ceil(field.w / zoom))) + 1
             );
-            how = "by the pixel-art sampling mode";
+            const int32_t end_row = std::min(
+                static_cast<int32_t>(reference_atlas.grid_height),
+                first_tile(cam_y + static_cast<int32_t>(std::ceil(field.h / zoom))) + 1
+            );
+            for (int32_t row = std::max(0, first_tile(cam_y)); row < end_row; ++row)
+                for (int32_t column = std::max(0, first_tile(cam_x)); column < end_column;
+                     ++column) {
+                    const double left =
+                        field.x + (column * tile - cam_x) * static_cast<double>(zoom);
+                    const double top = field.y + (row * tile - cam_y) * static_cast<double>(zoom);
+                    const auto [x0, x1] = covered(left, span, field.x, field.x + field.w);
+                    const auto [y0, y1] = covered(top, span, field.y, field.y + field.h);
+                    if (x0 >= x1 || y0 >= y1)
+                        continue;
+                    if (gw::read_terrain_view(
+                            reference_atlas,
+                            0,
+                            column * tile,
+                            row * tile,
+                            gw::tile_edge,
+                            gw::tile_edge,
+                            rgba.data(),
+                            std::size_t{gw::tile_edge} * 4U
+                        ) != gw::TerrainAtlasError::none)
+                        fail("the atlas refused a level-0 tile at zoom " + zoom_text(zoom));
+                    for (std::size_t i = 0; i < std::size_t{gw::tile_edge} * gw::tile_edge; ++i)
+                        std::memcpy(&rgb[i * 3U], &rgba[i * 4U], 3);
+                    wr::pixelart_rgb24(
+                        {rgb.data(), gw::tile_edge, gw::tile_edge, gw::tile_edge},
+                        {zoom, zoom, left - x0, top - y0},
+                        {reference.rgb.data() + (static_cast<std::size_t>(y0) * reference.width +
+                                                 static_cast<std::size_t>(x0)) *
+                                                    3U,
+                         static_cast<uint32_t>(x1 - x0),
+                         static_cast<uint32_t>(y1 - y0),
+                         reference.width}
+                    );
+                }
+            how = "by the pixel-art sampling mode, tile by tile";
         } else {
             compared = false;
             how = "LINEAR straight, with no target";
