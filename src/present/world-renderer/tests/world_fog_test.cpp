@@ -4,6 +4,7 @@
 #include "oa/present/world_renderer/world_fog.hpp"
 #include "oa/test/check.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -311,6 +312,109 @@ void feature_owner_rule_skips_the_sight_test() {
     OA_CHECK(!wr::feature_drawn_without_sight(10, true, 1, player));
 }
 
+// The grid is built again only where what it reads changed: a camera
+// moved, the rules, the viewer, the view's size, or a cell it reads
+// passing in or out of sight or mapping; a stamp more on a cell in sight,
+// another player's mapping and a cell past the view keep it. Each grid it
+// keeps or builds is the grid build_fog_grid builds.
+void update_keeps_a_grid_built_from_the_same_sight() {
+    SightMap map(16, 16, 1, 0x2);
+    map.grid.coverage[5 * 16 + 4] = 0;
+    map.grid.player_bits[6 * 16 + 6] = 0x1;
+    const auto same_grid = [](const wr::FogGrid& a, const wr::FogGrid& b) {
+        if (a.width != b.width || a.height != b.height || a.first_cell_x != b.first_cell_x ||
+            a.first_cell_z != b.first_cell_z || a.offset_x != b.offset_x ||
+            a.offset_z != b.offset_z || a.variant_phase != b.variant_phase ||
+            a.tiles.size() != b.tiles.size())
+            return false;
+        for (std::size_t at = 0; at < a.tiles.size(); ++at)
+            if (a.tiles[at].unseen != b.tiles[at].unseen ||
+                a.tiles[at].unmapped != b.tiles[at].unmapped)
+                return false;
+        return true;
+    };
+    wr::FogGrid grid;
+    wr::FogGridSource source;
+
+    struct View {
+        int32_t camera_x{64};
+        int32_t camera_z{64};
+        int32_t width{128};
+        int32_t height{96};
+        uint8_t viewer{1};
+        wr::FogOptions options{true, true};
+    };
+
+    View view;
+    const auto update = [&]() {
+        return wr::update_fog_grid(
+            map.grid,
+            view.viewer,
+            map.grid.coverage,
+            view.options,
+            view.camera_x,
+            view.camera_z,
+            view.width,
+            view.height,
+            grid,
+            source
+        );
+    };
+    const auto built_alike = [&]() {
+        return same_grid(
+            grid,
+            wr::build_fog_grid(
+                map.grid,
+                view.viewer,
+                map.grid.coverage,
+                view.options,
+                view.camera_x,
+                view.camera_z,
+                view.width,
+                view.height
+            )
+        );
+    };
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    OA_CHECK(!update());
+    // The view reads cells 1 to 6 across and 1 to 5 down. A stamp more on
+    // a cell in sight, another player's mapping, and a cell past the view
+    // leave what the grid reads as it was.
+    map.grid.coverage[3 * 16 + 3] = 3;
+    map.grid.player_bits[3 * 16 + 3] = 0x2 | 0x8;
+    map.grid.coverage[15 * 16 + 15] = 0;
+    OA_CHECK(!update());
+    OA_CHECK(built_alike());
+    // A cell it reads out of sight, or no longer mapped by the viewer.
+    map.grid.coverage[3 * 16 + 5] = 0;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    map.grid.player_bits[4 * 16 + 2] = 0x1;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    // The camera by a map pixel, the rules, the viewer, the view's size.
+    view.camera_x += 1;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    view.options.line_of_sight = false;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    view.viewer = 0;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    view.height += 32;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    OA_CHECK(!update());
+    // A camera past the map's edge reads the cells off it as off the map.
+    view.camera_x = -200;
+    view.camera_z = 440;
+    OA_CHECK(update());
+    OA_CHECK(built_alike());
+    OA_CHECK(!update());
+}
+
 int main() {
     placement_follows_camera();
     clear_when_everything_is_seen();
@@ -326,5 +430,6 @@ int main() {
     drawing_clips_to_the_surface_and_view();
     dithered_fog_clears_alternate_map_pixels();
     feature_owner_rule_skips_the_sight_test();
+    update_keeps_a_grid_built_from_the_same_sight();
     return oa::test::check_exit_status();
 }

@@ -8673,11 +8673,13 @@ class Runtime final : public menu::Host,
     /// @param camera_x map pixel at the view's left edge
     /// @param camera_z map pixel at the view's top edge
     /// @param dithered the DitheredFog option is on
+    /// @param changed the grid is not the one noted last
     void note_full_fog_grid(
         const oa::present::world_renderer::FogGrid& grid,
         int32_t camera_x,
         int32_t camera_z,
-        bool dithered
+        bool dithered,
+        bool changed
     );
 
     /// Returns the colour the Full tier's overlay canvas is cleared to: the
@@ -15922,6 +15924,10 @@ class Runtime final : public menu::Host,
     oa::present::world_renderer::FogTileSet fog_tiles_{};
     oa::present::world_renderer::FogShading fog_shading_{};
     bool fog_frames_ready_ = false;
+    // The fog grid the last frame drew and what it was built from, which
+    // the next frame keeps where it reads the same sight (update_fog_grid).
+    oa::present::world_renderer::FogGrid fog_grid_{};
+    oa::present::world_renderer::FogGridSource fog_grid_source_{};
 
     // Per TNT feature index of the current map: drawn only in line of sight,
     // and the footprint whose far corner may be the one in sight.

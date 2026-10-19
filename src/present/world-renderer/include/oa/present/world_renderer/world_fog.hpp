@@ -177,6 +177,62 @@ struct FogView {
     int32_t view_height
 );
 
+/// What a fog grid was last built from (update_fog_grid): the view, the
+/// rules and the viewer, and for each sight cell the grid reads, row by
+/// row, whether it lies on the map, is in sight and is mapped by the
+/// viewer.
+struct FogGridSource {
+    bool built{}; ///< a grid was built from it
+    int32_t camera_x{};
+    int32_t camera_z{};
+    int32_t view_width{};
+    int32_t view_height{};
+    int32_t sight_width{};
+    int32_t sight_height{};
+    uint8_t viewer{};
+    FogOptions options{};
+    std::vector<uint8_t>
+        cells; ///< fog_source_on_map, fog_source_in_sight and fog_source_mapped bits
+};
+
+/// A sight cell of a FogGridSource lies on the map.
+inline constexpr uint8_t fog_source_on_map = 1;
+/// A sight cell of a FogGridSource is in the viewer's sight.
+inline constexpr uint8_t fog_source_in_sight = 2;
+/// A sight cell of a FogGridSource is mapped by the viewer.
+inline constexpr uint8_t fog_source_mapped = 4;
+
+/// Builds a fog grid as build_fog_grid does, unless the grid holds one
+/// built from the same source already: the same view, rules and viewer,
+/// and every sight cell the grid reads on or off the map, in or out of
+/// sight and mapped or not as it was. Reading the cells costs a fraction
+/// of building the grid, which the frames between two of the
+/// simulation's updates of sight would otherwise build alike.
+///
+/// @param sight the match's sight grid, as build_fog_grid reads it
+/// @param viewer the player whose view the fog shows
+/// @param coverage the viewer's per-cell count of the stamps seeing it
+/// @param options line-of-sight and mapping rules
+/// @param camera_x camera map-pixel X
+/// @param camera_z camera map-pixel Z (screen row)
+/// @param view_width view width in map pixels
+/// @param view_height view height in map pixels
+/// @param[in,out] grid the grid last built from `source`, built again where the source changed
+/// @param[in,out] source what the grid was built from, brought up to date
+/// @return true when the grid was built again, false when it was kept
+bool update_fog_grid(
+    const sim::visibility_state::PlayerSightGrid& sight,
+    uint8_t viewer,
+    std::span<const uint16_t> coverage,
+    FogOptions options,
+    int32_t camera_x,
+    int32_t camera_z,
+    int32_t view_width,
+    int32_t view_height,
+    FogGrid& grid,
+    FogGridSource& source
+);
+
 /// Draws the fog grid over the view.
 ///
 /// Wholly never-mapped tiles are filled, wholly unseen tiles grayed (or

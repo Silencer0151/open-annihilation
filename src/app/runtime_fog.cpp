@@ -48,7 +48,7 @@ void Runtime::apply_match_fog(
         coverage = match_->player_coverage(viewer);
     } catch (const std::exception&) {
         if (card_fog)
-            note_full_fog_grid({}, 0, 0, dithered);
+            note_full_fog_grid({}, 0, 0, dithered, true);
         return;
     }
     const auto& sight = match_->sight();
@@ -56,7 +56,7 @@ void Runtime::apply_match_fog(
     const bool mapping_on = match_mapping_on();
     if (coverage.empty() || sight.width <= 0 || sight.height <= 0 || (!los_on && !mapping_on)) {
         if (card_fog)
-            note_full_fog_grid({}, 0, 0, dithered);
+            note_full_fog_grid({}, 0, 0, dithered, true);
         return;
     }
     ensure_fog_frames();
@@ -68,7 +68,8 @@ void Runtime::apply_match_fog(
     const oa::present::world_renderer::FogView view{
         dest_x, dest_y, dest_w, dest_h, camera_x, camera_y, zoom_fp
     };
-    auto grid = oa::present::world_renderer::build_fog_grid(
+    // The last frame's grid where the sight it reads is the same.
+    bool changed = oa::present::world_renderer::update_fog_grid(
         sight,
         viewer,
         coverage,
@@ -76,22 +77,31 @@ void Runtime::apply_match_fog(
         view.camera_x,
         view.camera_z,
         oa::present::world_renderer::fog_map_span(zoom_fp, dest_w),
-        oa::present::world_renderer::fog_map_span(zoom_fp, dest_h)
+        oa::present::world_renderer::fog_map_span(zoom_fp, dest_h),
+        fog_grid_,
+        fog_grid_source_
     );
     // One pass alone leaves the other's corners clear: the gray pass then
     // the black pass give the pixels both in one pass give, since the black
-    // goes over the gray.
-    if (passes != FogPasses::both)
-        for (auto& tile : grid.tiles) {
+    // goes over the gray. The kept grid holds both.
+    oa::present::world_renderer::FogGrid one_pass;
+    const oa::present::world_renderer::FogGrid* drawn = &fog_grid_;
+    if (passes != FogPasses::both) {
+        one_pass = fog_grid_;
+        for (auto& tile : one_pass.tiles) {
             if (passes == FogPasses::unseen)
                 tile.unmapped = 0;
             else
                 tile.unseen = 0;
         }
+        drawn = &one_pass;
+        changed = true;
+    }
+    const auto& grid = *drawn;
     // The fog pass reads the DitheredFog bit of the match's Game word.
     fog_shading_.dithered = dithered;
     if (card_fog) {
-        note_full_fog_grid(grid, view.camera_x, view.camera_z, dithered);
+        note_full_fog_grid(grid, view.camera_x, view.camera_z, dithered, changed);
         phase_times_.fog += std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::steady_clock::now() - started
         )

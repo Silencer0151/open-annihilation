@@ -361,6 +361,9 @@ struct Runtime::FullPresentation {
         bool dithered{};         ///< the DitheredFog option
         card::Colour unmapped{}; ///< UI colour 0 through the display gamma
         card::Colour dither{};   ///< palette index 0 through the display gamma
+        /// Counts the grids noted that differ from the one before, so that
+        /// what is made from a grid is made again only for a new one.
+        uint64_t revision{};
     } fog;
 
     /// The fog mask of the frame's grid (full_fog::build_unseen_mask), and
@@ -372,6 +375,7 @@ struct Runtime::FullPresentation {
     uint32_t fog_mask_page_width{};     ///< texels across; 0 for no page
     uint32_t fog_mask_page_height{};    ///< texels down
     full_fog::UnseenMask fog_mask_held; ///< what the page holds; empty when not filled
+    uint64_t fog_mask_revision{};       ///< the fog's revision fog_mask was built from
     /// The greyed pass is drawn tile by tile at every zoom, as
     /// --check-render-tiers asks to count the quads the mask spares.
     bool fog_mask_off{};

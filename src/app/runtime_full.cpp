@@ -1847,9 +1847,13 @@ bool Runtime::present_full_match_layers(bool dialogs) {
         };
         // The fog mask of the frame's grid on its page, which is made with
         // room to spare where the mask outgrows it, as far as the memory
-        // guard allows, and filled again only where the mask changed.
+        // guard allows, and filled again only where the mask changed. The
+        // mask is built again only for a grid that differs from the last.
         const auto ensure_fog_mask = [&]() {
-            full_fog::build_unseen_mask(fog.grid, full.fog_mask);
+            if (full.fog_mask_revision != fog.revision || full.fog_mask.width == 0) {
+                full_fog::build_unseen_mask(fog.grid, full.fog_mask);
+                full.fog_mask_revision = fog.revision;
+            }
             const auto& mask = full.fog_mask;
             if (mask.width == 0)
                 return false;

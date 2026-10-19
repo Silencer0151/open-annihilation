@@ -123,11 +123,14 @@ void Runtime::note_full_fog_grid(
     const oa::present::world_renderer::FogGrid& grid,
     int32_t camera_x,
     int32_t camera_z,
-    bool dithered
+    bool dithered,
+    bool changed
 ) {
     if (!full_)
         return;
     auto& fog = full_->fog;
+    if (changed)
+        ++fog.revision;
     fog.grid = grid;
     fog.camera_x = camera_x;
     fog.camera_z = camera_z;

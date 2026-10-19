@@ -451,6 +451,83 @@ FogGrid build_fog_grid(
     return grid;
 }
 
+bool update_fog_grid(
+    const sim::visibility_state::PlayerSightGrid& sight,
+    uint8_t viewer,
+    std::span<const uint16_t> coverage,
+    FogOptions options,
+    int32_t camera_x,
+    int32_t camera_z,
+    int32_t view_width,
+    int32_t view_height,
+    FogGrid& grid,
+    FogGridSource& source
+) {
+    bool same = source.built && source.camera_x == camera_x && source.camera_z == camera_z &&
+                source.view_width == view_width && source.view_height == view_height &&
+                source.sight_width == sight.width && source.sight_height == sight.height &&
+                source.viewer == viewer && source.options.line_of_sight == options.line_of_sight &&
+                source.options.mapping == options.mapping;
+    // The cells build_fog_grid reads, read as it reads them.
+    const int32_t width = (view_width + fog_cell_pixels - 1) / fog_cell_pixels + 2;
+    const int32_t height = (view_height + fog_cell_pixels - 1) / fog_cell_pixels + 2;
+    const std::size_t count = width < 2 || height < 2 ? 0
+                                                      : static_cast<std::size_t>(width) *
+                                                            static_cast<std::size_t>(height);
+    if (source.cells.size() != count) {
+        same = false;
+        source.cells.assign(count, 0);
+    }
+    const int32_t first_x = first_cell(camera_x);
+    const int32_t first_z = first_cell(camera_z);
+    const auto viewer_bit = static_cast<uint16_t>(1u << (viewer & 0x1fu));
+    const auto cells = static_cast<std::size_t>(sight.width > 0 ? sight.width : 0) *
+                       static_cast<std::size_t>(sight.height > 0 ? sight.height : 0);
+    std::size_t at = 0;
+    for (int32_t row = 0; count != 0 && row < height; ++row) {
+        const auto z = first_z + row;
+        for (int32_t column = 0; column < width; ++column, ++at) {
+            const auto x = first_x + column;
+            uint8_t read = 0;
+            if (x >= 0 && z >= 0 && x < sight.width && z < sight.height) {
+                const auto index =
+                    static_cast<std::size_t>(z) * static_cast<std::size_t>(sight.width) +
+                    static_cast<std::size_t>(x);
+                if (index < cells) {
+                    read = fog_source_on_map;
+                    if (index < coverage.size() &&
+                        sim::visibility_state::count_in_sight(
+                            coverage[index], sim::visibility_state::SightReading::player
+                        ))
+                        read |= fog_source_in_sight;
+                    if (index < sight.player_bits.size() &&
+                        (sight.player_bits[index] & viewer_bit) != 0)
+                        read |= fog_source_mapped;
+                }
+            }
+            if (source.cells[at] != read) {
+                same = false;
+                source.cells[at] = read;
+            }
+        }
+    }
+    if (same)
+        return false;
+    source.built = true;
+    source.camera_x = camera_x;
+    source.camera_z = camera_z;
+    source.view_width = view_width;
+    source.view_height = view_height;
+    source.sight_width = sight.width;
+    source.sight_height = sight.height;
+    source.viewer = viewer;
+    source.options = options;
+    grid = build_fog_grid(
+        sight, viewer, coverage, options, camera_x, camera_z, view_width, view_height
+    );
+    return true;
+}
+
 void draw_fog_grid(
     Surface& surface,
     const FogView& view,
