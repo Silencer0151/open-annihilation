@@ -208,6 +208,24 @@ void test_shaded_polygon() {
     bind_display(nullptr);
 }
 
+// A polygon draws alike before and after a taller one, which leaves its
+// span table rows past the shorter one's height as it wrote them: the rows
+// a polygon reads are its own, the notched one's though it is not convex.
+void test_span_rows_after_a_taller_polygon() {
+    const DepthVertex notched[] = {{2, 2, 0}, {12, 2, 0}, {12, 10, 0}, {7, 5, 0}, {2, 10, 0}};
+    const DepthVertex tall[] = {{0, 0, 0}, {15, 0, 0}, {15, 40, 0}, {0, 40, 0}};
+    for (const auto draw : {&fill_depth_polygon, &outline_depth_polygon}) {
+        auto first = make_sprite(16, 12, false, 0);
+        CHECK(draw(first.sprite, notched, 5, ink) == 1);
+        auto taller = make_sprite(16, 48, false, 0);
+        CHECK(draw(taller.sprite, tall, 4, ink) == 1);
+        auto again = make_sprite(16, 12, false, 0);
+        CHECK(draw(again.sprite, notched, 5, ink) == 1);
+        CHECK(again.pixels == first.pixels);
+        CHECK(taller.pixels[39 * 16] == ink);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -219,6 +237,7 @@ int main() {
     test_outline_polygon();
     test_depth_span_clip();
     test_shaded_polygon();
+    test_span_rows_after_a_taller_polygon();
     if (failures != 0) {
         std::fprintf(stderr, "%d failure(s)\n", failures);
         return EXIT_FAILURE;
