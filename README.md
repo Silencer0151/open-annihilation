@@ -37,6 +37,11 @@
 data from your own copy of the original game. Support for
 **Total Annihilation: Kingdoms** is on the [roadmap](#roadmap).
 
+Website: [play.coreprime.net](https://play.coreprime.net/) ·
+Mods and maps: [mods.coreprime.net](https://mods.coreprime.net/) ·
+Make your own: [creators.coreprime.net](https://creators.coreprime.net/) ·
+Press kit: [press.coreprime.net](https://press.coreprime.net/)
+
 The main menu shows **Open Annihilation** and this build's version under
 the logo. A mod that names its own version text shows that instead, and
 the demo, whose game data names no revision, shows neither.
@@ -75,6 +80,9 @@ from your copy of Total Annihilation and starting the game:
   </tbody>
 </table>
 
+The same guides, with pictures and in six languages, are at
+[play.coreprime.net/install](https://play.coreprime.net/en/install/).
+
 ## How the project works
 
 These documents set out how the project is run and how changes are made:
@@ -105,6 +113,9 @@ Total Annihilation: Kingdoms:
   full support for both Total Annihilation and TA: Kingdoms game assets: a
   command-line tool for the games' file formats, and a browser-based studio
   with an asset explorer, map editor, unit viewer and live sandbox.
+- **[Core Prime Creators](https://creators.coreprime.net/)** is the file
+  format reference for Total Annihilation and TA: Kingdoms, rendered from
+  KBot's documentation, with the way into modding Open Annihilation.
 
 ## Roadmap
 
@@ -137,6 +148,10 @@ hacks it names, with no code for any particular mod. See
 profile format and every standard hack. Mods published to a registry are
 installed and updated from [the Library](docs/library.md), and map packs
 add maps the same way ([docs/maps/README.md](docs/maps/README.md)).
+Browse every package in the library at
+[mods.coreprime.net](https://mods.coreprime.net/en/), and read the
+packaging guide at
+[mods.coreprime.net/en/packaging](https://mods.coreprime.net/en/packaging/).
 
 ## Network games from the command line
 
